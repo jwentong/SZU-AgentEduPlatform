@@ -1,0 +1,285 @@
+import { createHash } from 'crypto';
+import { promises as fs } from 'fs';
+import path from 'path';
+import { nanoid } from 'nanoid';
+import { writeJsonFileAtomic } from '@/lib/server/classroom-storage';
+import type {
+  CourseArtifactJob,
+  CourseArtifactRecord,
+  CourseMaterialExtraction,
+  CourseMaterialRecord,
+  CourseSpace,
+  CreateCourseSpaceInput,
+  PublishedKnowledgePackage,
+} from '@/lib/course-space/types';
+import { markdownToArtifactHtml, WORD_ARTIFACT_TYPES } from '@/lib/course-space/artifact-formats';
+import { buildCourseArtifactDocx } from '@/lib/server/course-artifact-docx';
+import { getCourseSpaceStorageAdapter } from '@/lib/server/course-space-storage-adapter';
+
+const databaseAdapter = getCourseSpaceStorageAdapter();
+
+export const COURSE_SPACES_DIR = process.env.COURSE_SPACES_DATA_DIR
+  ? path.resolve(process.env.COURSE_SPACES_DATA_DIR)
+  : path.join(process.cwd(), 'data', 'course-spaces');
+const COURSES_DIR = path.join(COURSE_SPACES_DIR, 'courses');
+const MATERIALS_DIR = path.join(COURSE_SPACES_DIR, 'materials');
+const JOBS_DIR = path.join(COURSE_SPACES_DIR, 'jobs');
+const ARTIFACTS_DIR = path.join(COURSE_SPACES_DIR, 'artifacts');
+const ARTIFACT_FILES_DIR = path.join(COURSE_SPACES_DIR, 'artifact-files');
+const KNOWLEDGE_DIR = path.join(COURSE_SPACES_DIR, 'knowledge-packages');
+
+const locks = new Map<string, Promise<void>>();
+
+async function withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const previous = locks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => (release = resolve));
+  locks.set(key, current);
+  try {
+    await previous;
+    return await fn();
+  } finally {
+    release();
+    if (locks.get(key) === current) locks.delete(key);
+  }
+}
+
+function validId(id: string) {
+  return /^[a-zA-Z0-9_-]+$/.test(id);
+}
+
+function assertId(id: string, label: string) {
+  if (!validId(id)) throw new Error(`Invalid ${label}`);
+}
+
+async function readJson<T>(filePath: string): Promise<T | null> {
+  try {
+    return JSON.parse(await fs.readFile(filePath, 'utf8')) as T;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+async function listJson<T>(dir: string): Promise<T[]> {
+  try {
+    const files = (await fs.readdir(dir)).filter((name) => name.endsWith('.json'));
+    const values = await Promise.all(files.map((name) => readJson<T>(path.join(dir, name))));
+    return values.reduce<T[]>((items, item) => item === null ? items : [...items, item], []);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+export async function listServerCourses(teacherId: string): Promise<CourseSpace[]> {
+  return (await listJson<CourseSpace>(COURSES_DIR))
+    .filter((course) => course.teacherId === teacherId)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export async function readServerCourse(courseId: string): Promise<CourseSpace | null> {
+  assertId(courseId, 'course id');
+  return readJson<CourseSpace>(path.join(COURSES_DIR, `${courseId}.json`));
+}
+
+export async function createServerCourse(input: CreateCourseSpaceInput): Promise<CourseSpace> {
+  const now = Date.now();
+  const course: CourseSpace = {
+    id: nanoid(12),
+    teacherId: input.teacherId,
+    title: input.title.trim(),
+    subject: input.subject?.trim() || undefined,
+    gradeBand: input.gradeBand?.trim() || undefined,
+    term: input.term?.trim() || undefined,
+    description: input.description?.trim() || undefined,
+    status: 'draft',
+    modules: [],
+    materials: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+  await writeJsonFileAtomic(path.join(COURSES_DIR, `${course.id}.json`), course);
+  await databaseAdapter.saveCourse(course);
+  return course;
+}
+
+export async function saveServerCourse(course: CourseSpace): Promise<CourseSpace> {
+  assertId(course.id, 'course id');
+  const saved = { ...course, updatedAt: Date.now() };
+  await writeJsonFileAtomic(path.join(COURSES_DIR, `${course.id}.json`), saved);
+  await databaseAdapter.saveCourse(saved);
+  return saved;
+}
+
+export async function updateServerCourse(
+  courseId: string,
+  update: (course: CourseSpace) => CourseSpace | Promise<CourseSpace>,
+): Promise<CourseSpace> {
+  return withLock(`course:${courseId}`, async () => {
+    const course = await readServerCourse(courseId);
+    if (!course) throw new Error('Course not found');
+    return saveServerCourse(await update(course));
+  });
+}
+
+export async function storeCourseMaterial(input: {
+  courseId: string;
+  teacherId: string;
+  fileName: string;
+  mimeType: string;
+  bytes: Buffer;
+}): Promise<CourseMaterialRecord> {
+  assertId(input.courseId, 'course id');
+  const id = nanoid(14);
+  const extension = path.extname(input.fileName).slice(0, 12);
+  const materialDir = path.join(MATERIALS_DIR, id);
+  await fs.mkdir(materialDir, { recursive: true });
+  await fs.writeFile(path.join(materialDir, `source${extension}`), input.bytes);
+  const now = Date.now();
+  const record: CourseMaterialRecord = {
+    id,
+    teacherId: input.teacherId,
+    courseId: input.courseId,
+    name: path.basename(input.fileName),
+    mimeType: input.mimeType,
+    size: input.bytes.length,
+    storageKey: `${id}/source${extension}`,
+    sha256: createHash('sha256').update(input.bytes).digest('hex'),
+    status: 'uploaded',
+    createdAt: now,
+    updatedAt: now,
+  };
+  await updateServerCourse(input.courseId, (course) => ({
+    ...course,
+    materials: [...course.materials, record],
+  }));
+  return record;
+}
+
+export async function readCourseMaterialBytes(record: CourseMaterialRecord): Promise<Buffer> {
+  const resolved = path.resolve(MATERIALS_DIR, record.storageKey);
+  if (!resolved.startsWith(path.resolve(MATERIALS_DIR) + path.sep)) throw new Error('Invalid material path');
+  return fs.readFile(resolved);
+}
+
+export async function saveMaterialExtraction(extraction: CourseMaterialExtraction) {
+  assertId(extraction.materialId, 'material id');
+  await writeJsonFileAtomic(
+    path.join(MATERIALS_DIR, extraction.materialId, 'extraction.json'),
+    extraction,
+  );
+  await databaseAdapter.saveMaterialExtraction(extraction);
+}
+
+export async function readMaterialExtraction(materialId: string) {
+  assertId(materialId, 'material id');
+  return readJson<CourseMaterialExtraction>(path.join(MATERIALS_DIR, materialId, 'extraction.json'));
+}
+
+export async function saveCourseJob(job: CourseArtifactJob): Promise<CourseArtifactJob> {
+  assertId(job.id, 'job id');
+  await writeJsonFileAtomic(path.join(JOBS_DIR, `${job.id}.json`), job);
+  await databaseAdapter.saveJob(job);
+  return job;
+}
+
+export async function readCourseJob(jobId: string) {
+  assertId(jobId, 'job id');
+  return readJson<CourseArtifactJob>(path.join(JOBS_DIR, `${jobId}.json`));
+}
+
+export async function updateCourseJob(jobId: string, patch: Partial<CourseArtifactJob>) {
+  return withLock(`job:${jobId}`, async () => {
+    const job = await readCourseJob(jobId);
+    if (!job) throw new Error('Job not found');
+    return saveCourseJob({ ...job, ...patch, updatedAt: Date.now() });
+  });
+}
+
+export async function listCourseJobs(courseId: string) {
+  return (await listJson<CourseArtifactJob>(JOBS_DIR))
+    .filter((job) => job.courseId === courseId)
+    .sort((a, b) => b.createdAt - a.createdAt);
+}
+
+export async function saveCourseArtifact(artifact: CourseArtifactRecord) {
+  assertId(artifact.id, 'artifact id');
+  await writeJsonFileAtomic(path.join(ARTIFACTS_DIR, `${artifact.id}.json`), artifact);
+  await databaseAdapter.saveArtifact(artifact);
+  return artifact;
+}
+
+export async function saveCourseArtifactFile(artifactId: string, fileName: string, bytes: Buffer) {
+  assertId(artifactId, 'artifact id');
+  const safeName = path.basename(fileName);
+  const dir = path.join(ARTIFACT_FILES_DIR, artifactId);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, safeName), bytes);
+  return `${artifactId}/${safeName}`;
+}
+
+export async function readCourseArtifactFile(storageKey: string) {
+  const resolved = path.resolve(ARTIFACT_FILES_DIR, storageKey);
+  if (!resolved.startsWith(path.resolve(ARTIFACT_FILES_DIR) + path.sep)) throw new Error('Invalid artifact file path');
+  return fs.readFile(resolved);
+}
+
+export async function readCourseArtifact(artifactId: string) {
+  assertId(artifactId, 'artifact id');
+  return readJson<CourseArtifactRecord>(path.join(ARTIFACTS_DIR, `${artifactId}.json`));
+}
+
+export async function deleteCourseArtifact(artifactId: string) {
+  assertId(artifactId, 'artifact id');
+  const artifact = await readCourseArtifact(artifactId);
+  if (!artifact) return false;
+  await fs.rm(path.join(ARTIFACT_FILES_DIR, artifactId), { recursive: true, force: true });
+  await fs.rm(path.join(ARTIFACTS_DIR, `${artifactId}.json`), { force: true });
+  await databaseAdapter.deleteArtifact(artifactId);
+  return true;
+}
+
+export async function listCourseArtifacts(courseId: string) {
+  const databaseArtifacts = await databaseAdapter.listArtifacts(courseId);
+  const artifacts = (databaseArtifacts ?? await listJson<CourseArtifactRecord>(ARTIFACTS_DIR))
+    .filter((artifact) => artifact.courseId === courseId)
+    .sort((a, b) => b.createdAt - a.createdAt);
+  return Promise.all(artifacts.map(async (artifact) => {
+    let changed = false;
+    if (!artifact.htmlContent) {
+      artifact.htmlContent = markdownToArtifactHtml(artifact.content);
+      changed = true;
+    }
+    if (WORD_ARTIFACT_TYPES.has(artifact.type) && !artifact.wordStorageKey) {
+      const wordFileName = `${artifact.title.replace(/[\\/:*?"<>|]/g, '_')}.docx`;
+      artifact.wordFileName = wordFileName;
+      artifact.wordStorageKey = await saveCourseArtifactFile(
+        artifact.id,
+        wordFileName,
+        await buildCourseArtifactDocx(artifact.title, artifact.content),
+      );
+      changed = true;
+    }
+    if (changed) await saveCourseArtifact(artifact);
+    return artifact;
+  }));
+}
+
+export async function saveKnowledgePackage(pkg: PublishedKnowledgePackage) {
+  assertId(pkg.id, 'knowledge package id');
+  await writeJsonFileAtomic(path.join(KNOWLEDGE_DIR, `${pkg.id}.json`), pkg);
+  await databaseAdapter.saveKnowledgePackage(pkg);
+  return pkg;
+}
+
+export async function readKnowledgePackage(packageId: string) {
+  assertId(packageId, 'knowledge package id');
+  return readJson<PublishedKnowledgePackage>(path.join(KNOWLEDGE_DIR, `${packageId}.json`));
+}
+
+export async function listKnowledgePackages(courseId: string) {
+  return (await listJson<PublishedKnowledgePackage>(KNOWLEDGE_DIR))
+    .filter((pkg) => pkg.courseId === courseId)
+    .sort((a, b) => b.version - a.version);
+}
