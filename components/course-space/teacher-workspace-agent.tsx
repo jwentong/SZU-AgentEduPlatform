@@ -26,7 +26,7 @@ export function TeacherWorkspaceAgent({
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
-      content: `你好，我是“${course.title}”的课程操作智能体。课程材料、结构与中间产物已作为插件接入。我可以创建、移动和删除课程文件，也可以调用标准工作流生成课件。所有结构变更与删除操作都会先提交计划供你确认。`,
+      content: `你好，我是“${course.title}”的课程操作智能体。课程材料、结构与中间产物已作为插件接入。我可以批量创建课时目标、知识点、教学活动等结构文件，也可以移动、删除课程文件并调用标准工作流生成课件。所有结构变更与删除操作都会先提交计划供你确认。`,
     },
   ]);
   const [input, setInput] = useState('');
@@ -192,7 +192,9 @@ export function TeacherWorkspaceAgent({
                   {message.plan.requiresConfirmation && message.plan.status === 'planned' && (
                     <Button
                       size="sm"
-                      variant={message.plan.action?.type.startsWith('delete') ? 'destructive' : 'default'}
+                      variant={
+                        message.plan.action?.type.startsWith('delete') ? 'destructive' : 'default'
+                      }
                       className="mt-3 rounded-full"
                       onClick={() => void executePlan(index, message.plan!)}
                     >
