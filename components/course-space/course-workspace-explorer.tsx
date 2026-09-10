@@ -8,7 +8,6 @@ import {
   ExternalLink,
   FileText,
   Folder,
-  FolderPlus,
   History,
   Plus,
   Presentation,
@@ -19,6 +18,7 @@ import type {
   CourseArtifactJob,
   CourseArtifactRecord,
   CourseArtifactType,
+  CourseLessonFile,
   CourseSpace,
 } from '@/lib/course-space';
 import type { TeacherOperationPlan } from '@/lib/course-space/teacher-agent-intent';
@@ -32,7 +32,8 @@ type BrowserFile = {
   id: string;
   title: string;
   kind: 'artifact';
-  artifact: CourseArtifactRecord;
+  artifact?: CourseArtifactRecord;
+  courseFile?: CourseLessonFile;
   scope: Scope;
 };
 const artifactPriority = (artifact: CourseArtifactRecord) =>
@@ -77,11 +78,11 @@ export function CourseWorkspaceExplorer({
       (firstLesson ? { type: 'lesson', lessonId: firstLesson.id } : { type: 'course' }),
   );
   const [expanded, setExpanded] = useState(() => new Set(course.modules.map((item) => item.id)));
-  const [expandedFolders, setExpandedFolders] = useState(
-    () => new Set(course.modules.flatMap((item) => item.folders?.map((folder) => folder.id) ?? [])),
-  );
+  const [expandedLessons, setExpandedLessons] = useState(() => new Set<string>());
   const [courseFilesExpanded, setCourseFilesExpanded] = useState(true);
   const [selectedFileId, setSelectedFileId] = useState('');
+  const [savingStructure, setSavingStructure] = useState(false);
+  const [treeMessage, setTreeMessage] = useState('');
   const initializedFromArtifacts = useRef(false);
 
   useEffect(() => {
@@ -109,7 +110,10 @@ export function CourseWorkspaceExplorer({
       : [];
   }, [artifacts, course, scope]);
   const explicitlySelectedArtifact = artifacts.find((item) => item.id === selectedFileId);
-  const selectedFile = explicitlySelectedArtifact
+  const explicitlySelectedCourseFile = course.modules
+    .flatMap((module) => module.lessons.flatMap((lesson) => lesson.files ?? []))
+    .find((item) => item.id === selectedFileId);
+  const selectedFile: BrowserFile | undefined = explicitlySelectedArtifact
     ? {
         id: explicitlySelectedArtifact.id,
         title: explicitlySelectedArtifact.title,
@@ -117,7 +121,15 @@ export function CourseWorkspaceExplorer({
         artifact: explicitlySelectedArtifact,
         scope: explicitlySelectedArtifact.scope,
       }
-    : files[0];
+    : explicitlySelectedCourseFile
+      ? {
+          id: explicitlySelectedCourseFile.id,
+          title: explicitlySelectedCourseFile.title,
+          kind: 'artifact',
+          courseFile: explicitlySelectedCourseFile,
+          scope,
+        }
+      : files[0];
   const selectScope = (next: Scope) => {
     setScope(next);
     setSelectedFileId('');
@@ -147,75 +159,54 @@ export function CourseWorkspaceExplorer({
     setExpanded((items) => new Set(items).add(moduleId));
     selectScope({ type: 'module', moduleId });
   };
-  const addFolder = async (moduleId: string) => {
-    const title = window.prompt('请输入分组文件夹名称，例如“第1–15周”');
-    if (!title?.trim()) return;
-    const target = course.modules.find((item) => item.id === moduleId);
-    if (!target) return;
-    const now = Date.now();
-    const folderId = nanoid(10);
-    await onCourseChange({
-      ...course,
-      updatedAt: now,
-      modules: course.modules.map((item) =>
-        item.id === moduleId
-          ? {
-              ...item,
-              updatedAt: now,
-              folders: [
-                ...(item.folders ?? []),
-                {
-                  id: folderId,
-                  moduleId,
-                  title: title.trim(),
-                  order: (item.folders?.length ?? 0) + 1,
-                  createdAt: now,
-                  updatedAt: now,
-                },
-              ],
-            }
-          : item,
-      ),
-    });
-    setExpanded((items) => new Set(items).add(moduleId));
-    setExpandedFolders((items) => new Set(items).add(folderId));
-  };
-  const addLesson = async (moduleId: string, folderId?: string) => {
+  const addLesson = async (moduleId: string) => {
     const title = window.prompt('请输入课时文件夹名称，例如“第1周”');
     if (!title?.trim()) return;
     const target = course.modules.find((item) => item.id === moduleId);
     if (!target) return;
+    if (target.lessons.some((lesson) => lesson.title.trim() === title.trim())) {
+      setTreeMessage(`“${title.trim()}”已经存在，请使用其他文件夹名称。`);
+      return;
+    }
     const now = Date.now();
     const lessonId = nanoid(10);
-    await onCourseChange({
-      ...course,
-      updatedAt: now,
-      modules: course.modules.map((item) =>
-        item.id === moduleId
-          ? {
-              ...item,
-              updatedAt: now,
-              lessons: [
-                ...item.lessons,
-                {
-                  id: lessonId,
-                  moduleId,
-                  folderId,
-                  title: title.trim(),
-                  order: item.lessons.length + 1,
-                  objectives: [],
-                  materialIds: [],
-                  createdAt: now,
-                  updatedAt: now,
-                },
-              ],
-            }
-          : item,
-      ),
-    });
-    setExpanded((items) => new Set(items).add(moduleId));
-    if (folderId) setExpandedFolders((items) => new Set(items).add(folderId));
-    selectScope({ type: 'lesson', lessonId });
+    setSavingStructure(true);
+    setTreeMessage('');
+    try {
+      await onCourseChange({
+        ...course,
+        updatedAt: now,
+        modules: course.modules.map((item) =>
+          item.id === moduleId
+            ? {
+                ...item,
+                updatedAt: now,
+                lessons: [
+                  ...item.lessons,
+                  {
+                    id: lessonId,
+                    moduleId,
+                    title: title.trim(),
+                    order: item.lessons.length + 1,
+                    objectives: [],
+                    materialIds: [],
+                    createdAt: now,
+                    updatedAt: now,
+                  },
+                ],
+              }
+            : item,
+        ),
+      });
+      setExpanded((items) => new Set(items).add(moduleId));
+      setExpandedLessons((items) => new Set(items).add(lessonId));
+      selectScope({ type: 'lesson', lessonId });
+      setTreeMessage(`已创建文件夹“${title.trim()}”。`);
+    } catch (error) {
+      setTreeMessage(`创建文件夹失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setSavingStructure(false);
+    }
   };
   const createStructureWithAgent = async () => {
     const message = window.prompt(
@@ -338,17 +329,14 @@ export function CourseWorkspaceExplorer({
             </div>
           )}
           <div className="space-y-1">
+            {treeMessage && (
+              <div className="mb-2 rounded-lg border border-[#B00055]/15 bg-white px-2.5 py-2 text-[11px] leading-4 text-slate-600">
+                {treeMessage}
+              </div>
+            )}
             {course.modules.map((module) => (
               <div key={module.id}>
                 <div className="group/module flex items-center">
-                  <button
-                    title={`在“${module.title}”下添加分组文件夹`}
-                    aria-label={`在“${module.title}”下添加分组文件夹`}
-                    onClick={() => void addFolder(module.id)}
-                    className="grid size-6 shrink-0 place-items-center rounded-md text-slate-400 opacity-60 hover:bg-[#B00055]/10 hover:text-[#B00055] group-hover/module:opacity-100"
-                  >
-                    <FolderPlus className="size-3.5" />
-                  </button>
                   <button
                     className="p-1 text-slate-400"
                     onClick={() =>
@@ -376,6 +364,7 @@ export function CourseWorkspaceExplorer({
                     title={`在“${module.title}”下添加课时文件夹`}
                     aria-label={`在“${module.title}”下添加课时文件夹`}
                     onClick={() => void addLesson(module.id)}
+                    disabled={savingStructure}
                     className="mr-1 grid size-6 shrink-0 place-items-center rounded-md text-slate-400 opacity-60 hover:bg-[#B00055]/10 hover:text-[#B00055] group-hover/module:opacity-100"
                   >
                     <Plus className="size-3.5" />
@@ -383,75 +372,94 @@ export function CourseWorkspaceExplorer({
                 </div>
                 {expanded.has(module.id) && (
                   <div className="ml-6 border-l pl-2">
-                    {module.lessons
-                      .filter((lesson) => !lesson.folderId)
-                      .map((lesson) => (
-                        <button
-                          key={lesson.id}
-                          onClick={() => selectScope({ type: 'lesson', lessonId: lesson.id })}
-                          className={`my-0.5 flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-xs ${scope.type === 'lesson' && scope.lessonId === lesson.id ? 'bg-[#B00055]/10 font-medium text-[#8F0046]' : 'text-slate-600 hover:bg-slate-100'}`}
-                        >
-                          <Presentation className="size-3.5 shrink-0" />
-                          <span className="truncate">{lesson.title}</span>
-                        </button>
-                      ))}
-                    {(module.folders ?? [])
+                    {[...module.lessons]
                       .sort((a, b) => a.order - b.order)
-                      .map((folder) => (
-                        <div key={folder.id}>
-                          <div className="group/folder flex items-center">
-                            <button
-                              className="p-1 text-slate-400"
-                              onClick={() =>
-                                setExpandedFolders((items) => {
-                                  const next = new Set(items);
-                                  next.has(folder.id)
-                                    ? next.delete(folder.id)
-                                    : next.add(folder.id);
-                                  return next;
-                                })
-                              }
-                            >
-                              {expandedFolders.has(folder.id) ? (
-                                <ChevronDown className="size-3" />
-                              ) : (
-                                <ChevronRight className="size-3" />
-                              )}
-                            </button>
-                            <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 py-2 text-xs font-medium text-slate-700">
-                              <Folder className="size-3.5 shrink-0 text-[#B00055]" />
-                              <span className="truncate">{folder.title}</span>
+                      .map((lesson) => {
+                        const artifactFiles = artifacts.filter(
+                          (artifact) =>
+                            artifact.scope.type === 'lesson' &&
+                            artifact.scope.lessonId === lesson.id,
+                        );
+                        const structureFiles = lesson.files ?? [];
+                        const fileCount = artifactFiles.length + structureFiles.length;
+                        const isExpanded = expandedLessons.has(lesson.id);
+                        return (
+                          <div key={lesson.id}>
+                            <div className="group/lesson flex items-center">
+                              <button
+                                className="p-1 text-slate-400"
+                                aria-label={`${isExpanded ? '收起' : '展开'}“${lesson.title}”`}
+                                onClick={() =>
+                                  setExpandedLessons((items) => {
+                                    const next = new Set(items);
+                                    next.has(lesson.id)
+                                      ? next.delete(lesson.id)
+                                      : next.add(lesson.id);
+                                    return next;
+                                  })
+                                }
+                              >
+                                {isExpanded ? (
+                                  <ChevronDown className="size-3" />
+                                ) : (
+                                  <ChevronRight className="size-3" />
+                                )}
+                              </button>
+                              <button
+                                onClick={() => {
+                                  selectScope({ type: 'lesson', lessonId: lesson.id });
+                                  setExpandedLessons((items) => new Set(items).add(lesson.id));
+                                }}
+                                className={`my-0.5 flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 py-2 text-left text-xs ${scope.type === 'lesson' && scope.lessonId === lesson.id ? 'bg-[#B00055]/10 font-medium text-[#8F0046]' : 'text-slate-600 hover:bg-slate-100'}`}
+                              >
+                                <Folder className="size-3.5 shrink-0 text-[#B00055]" />
+                                <span className="truncate">{lesson.title}</span>
+                                {fileCount > 0 && (
+                                  <span className="ml-auto text-[10px] text-slate-400">
+                                    {fileCount}
+                                  </span>
+                                )}
+                              </button>
                             </div>
-                            <button
-                              title={`在“${folder.title}”下添加课时`}
-                              aria-label={`在“${folder.title}”下添加课时`}
-                              onClick={() => void addLesson(module.id, folder.id)}
-                              className="mr-1 grid size-6 shrink-0 place-items-center rounded-md text-slate-400 opacity-60 hover:bg-[#B00055]/10 hover:text-[#B00055] group-hover/folder:opacity-100"
-                            >
-                              <Plus className="size-3.5" />
-                            </button>
-                          </div>
-                          {expandedFolders.has(folder.id) && (
-                            <div className="ml-5 border-l pl-2">
-                              {module.lessons
-                                .filter((lesson) => lesson.folderId === folder.id)
-                                .sort((a, b) => a.order - b.order)
-                                .map((lesson) => (
+                            {isExpanded && fileCount > 0 && (
+                              <div className="ml-5 border-l pl-2">
+                                {structureFiles.map((file) => (
                                   <button
-                                    key={lesson.id}
-                                    onClick={() =>
-                                      selectScope({ type: 'lesson', lessonId: lesson.id })
-                                    }
-                                    className={`my-0.5 flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-xs ${scope.type === 'lesson' && scope.lessonId === lesson.id ? 'bg-[#B00055]/10 font-medium text-[#8F0046]' : 'text-slate-600 hover:bg-slate-100'}`}
+                                    key={file.id}
+                                    title={file.title}
+                                    onClick={() => {
+                                      setScope({ type: 'lesson', lessonId: lesson.id });
+                                      setSelectedFileId(file.id);
+                                    }}
+                                    className={`my-0.5 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] ${selectedFileId === file.id ? 'bg-[#B00055]/10 font-medium text-[#8F0046]' : 'text-slate-500 hover:bg-slate-100'}`}
                                   >
-                                    <Presentation className="size-3.5 shrink-0" />
-                                    <span className="truncate">{lesson.title}</span>
+                                    <FileText className="size-3.5 shrink-0 text-blue-500" />
+                                    <span className="truncate">{file.title}</span>
                                   </button>
                                 ))}
-                            </div>
-                          )}
-                        </div>
-                      ))}
+                                {artifactFiles.map((artifact) => (
+                                  <button
+                                    key={artifact.id}
+                                    title={artifact.title}
+                                    onClick={() => {
+                                      setScope({ type: 'lesson', lessonId: lesson.id });
+                                      setSelectedFileId(artifact.id);
+                                    }}
+                                    className={`my-0.5 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] ${selectedFileId === artifact.id ? 'bg-[#B00055]/10 font-medium text-[#8F0046]' : 'text-slate-500 hover:bg-slate-100'}`}
+                                  >
+                                    {artifact.classroomUrl ? (
+                                      <Presentation className="size-3.5 shrink-0 text-[#B00055]" />
+                                    ) : (
+                                      <FileText className="size-3.5 shrink-0 text-blue-500" />
+                                    )}
+                                    <span className="truncate">{artifact.title}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                   </div>
                 )}
               </div>
@@ -485,6 +493,12 @@ export function CourseWorkspaceExplorer({
               <iframe
                 title={selectedFile.title}
                 srcDoc={`<!doctype html><html><head><meta charset="utf-8"><style>body{font:16px/1.75 system-ui;color:#172033;max-width:960px;margin:0 auto;padding:42px}h1,h2,h3{color:#101828}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:8px}</style></head><body>${selectedFile.artifact.htmlContent || `<h1>${selectedFile.artifact.title}</h1><pre>${selectedFile.artifact.content}</pre>`}</body></html>`}
+                className="h-full w-full rounded-xl border bg-white shadow-sm"
+              />
+            ) : selectedFile?.courseFile ? (
+              <iframe
+                title={selectedFile.title}
+                srcDoc={`<!doctype html><html><head><meta charset="utf-8"><style>body{font:16px/1.75 system-ui;color:#172033;max-width:900px;margin:0 auto;padding:48px}h1{font-size:28px}p{color:#667085}.empty{margin-top:28px;padding:24px;border:1px dashed #d0d5dd;border-radius:16px;background:#f8fafc}</style></head><body><h1>${selectedFile.courseFile.title}</h1>${selectedFile.courseFile.content ? `<div>${selectedFile.courseFile.content}</div>` : '<div class="empty"><strong>文件已创建</strong><p>当前内容为空，可由备课工作智能体结合课程材料与知识图谱继续完善。</p></div>'}</body></html>`}
                 className="h-full w-full rounded-xl border bg-white shadow-sm"
               />
             ) : (

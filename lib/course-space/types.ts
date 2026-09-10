@@ -32,23 +32,34 @@ export type CourseArtifactType =
   | 'assessment-rubric'
   | 'pbl-project';
 
-export interface CourseLesson {
+export type CourseLessonFileType =
+  | 'lesson-objectives'
+  | 'knowledge-points'
+  | 'teaching-activities'
+  | 'courseware-pages'
+  | 'narration-segments'
+  | 'exercises'
+  | 'assessment-criteria';
+
+export interface CourseLessonFile {
   id: string;
-  moduleId: string;
-  folderId?: string;
+  lessonId: string;
+  type: CourseLessonFileType;
   title: string;
-  order: number;
-  objectives: string[];
-  materialIds: string[];
+  content: string;
+  status: 'draft' | 'ready';
   createdAt: number;
   updatedAt: number;
 }
 
-export interface CourseLessonFolder {
+export interface CourseLesson {
   id: string;
   moduleId: string;
   title: string;
   order: number;
+  objectives: string[];
+  materialIds: string[];
+  files?: CourseLessonFile[];
   createdAt: number;
   updatedAt: number;
 }
@@ -59,7 +70,6 @@ export interface CourseModule {
   title: string;
   order: number;
   objectives: string[];
-  folders?: CourseLessonFolder[];
   lessons: CourseLesson[];
   createdAt: number;
   updatedAt: number;
@@ -210,7 +220,10 @@ export interface CourseArtifactJob {
   id: string;
   teacherId: string;
   courseId: string;
-  scope: { type: 'course' } | { type: 'module'; moduleId: string } | { type: 'lesson'; lessonId: string };
+  scope:
+    | { type: 'course' }
+    | { type: 'module'; moduleId: string }
+    | { type: 'lesson'; lessonId: string };
   artifactType: CourseArtifactType;
   status: 'queued' | 'running' | 'review' | 'approved' | 'failed';
   progress: number;

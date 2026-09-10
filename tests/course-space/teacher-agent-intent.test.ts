@@ -91,4 +91,18 @@ describe('teacher course operation planning', () => {
     expect(plan?.action).toMatchObject({ type: 'delete-artifact', artifactTitle: '第一周课程导入' });
     expect(plan?.requiresConfirmation).toBe(true);
   });
+
+  it('plans structured files for a range of weekly lesson folders', () => {
+    const weeklyCourse = {
+      ...course,
+      modules: [{
+        ...course.modules[0],
+        lessons: Array.from({ length: 15 }, (_, index) => ({ ...course.modules[0].lessons[0], id: `week-${index + 1}`, title: `第${index + 1}周`, order: index })),
+      }],
+    } satisfies CourseSpace;
+    const plan = planTeacherWorkspaceOperation('在第1周到第15周文件夹下创建：课时目标、知识点、教学活动等文件。', weeklyCourse);
+    expect(plan?.action).toMatchObject({ type: 'create-lesson-files', fileTypes: ['lesson-objectives', 'knowledge-points', 'teaching-activities'] });
+    expect(plan?.action && 'lessonIds' in plan.action ? plan.action.lessonIds : []).toHaveLength(15);
+    expect(plan?.requiresConfirmation).toBe(true);
+  });
 });
