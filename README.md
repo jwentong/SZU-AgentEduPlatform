@@ -36,6 +36,80 @@
   <a href="https://open.maic.chat/">Live Demo</a> · <a href="#-quick-start">Quick Start</a> · <a href="#lemonade-local-ai">Lemonade</a> · <a href="#funasr-local-asr">FunASR</a> · <a href="#-features">Features</a> · <a href="#-use-cases">Use Cases</a> · <a href="#-openclaw-integration">OpenClaw</a>
 </p>
 
+## 🎓 AI 教育平台扩展
+
+本仓库在 OpenMAIC 的生成、编辑、渲染、课堂播放和多智能体运行时基础上，扩展为面向教师备课与学生智能体使用的**课程工程平台**。平台不只生成单次课件，而是围绕一门课程持续管理材料、知识、教学设计、课件、讲稿、习题、评价量规及其版本关系。
+
+### 当前能力
+
+- **课程工程空间**：按“课程 → 模块 → 课时/周次 → 教学文件”组织内容，支持课时目标、知识点、教学活动、课件、讲稿、习题和评价指标。
+- **备课工作智能体**：教师可通过自然语言创建、移动和删除课程文件，或启动教学大纲、教学计划、课件、讲稿、习题、评分量规等标准工作流；结构变更和删除操作会先形成计划并请求确认。
+- **课程知识图谱**：从教师上传材料中抽取知识点、先修关系、课程目标、课时对齐关系和来源证据，并进入教师审核后发布。
+- **专业课件工作区**：复用 OpenMAIC 的 DSL、generation、renderer、editor、importer 与课堂能力，提供课程目录、逐页缩略图、完整课件预览以及讲稿/动作时间线。
+- **材料与历史产物管理**：保留原始材料、解析结果、生成任务、教学产物、课堂数据、附件、版本、权限和知识包，支持追溯来源及后续复用。
+- **多模态协作**：备课智能体支持上传或粘贴截图，并结合课程上下文完成分析与操作。
+
+### 核心工作流
+
+```text
+教师材料上传
+    ↓
+材料解析与来源引用
+    ↓
+知识抽取 Job → 教师审核 → 课程知识图谱/知识包
+    ↓
+课程大纲与教学计划
+    ↓
+模块/课时目标 → 课件 → 讲稿 → 习题 → 评价量规
+    ↓
+审核发布 → 学生智能体通过标准接口读取
+```
+
+课程中心入口为 `/course-space`；生成后的课堂继续使用 OpenMAIC 的 `/classroom/[id]` 播放与交互能力。
+
+### 数据存储与学生智能体接口
+
+平台把课程知识中台数据持久化为标准记录，而不是仅保存在浏览器或聊天文本中。主要数据域包括：
+
+- 课程、模块、课时与课程文件；
+- 原始材料、解析结果、附件及内容哈希；
+- 教学产物、生成任务、版本与审核发布状态；
+- 课件课堂的 stage/scenes、讲稿和动作时间线；
+- 知识图谱版本、节点、边、证据及课时对齐；
+- 知识包、访问授权和教师智能体会话/事件。
+
+生产环境建议使用 PostgreSQL。设置 `COURSE_DATABASE_URL`（优先）或 `DATABASE_URL` 后，课程数据会写入数据库；未配置时使用 `data/course-spaces/` 与 `data/classrooms/` 下的 JSON 文件作为本地开发回退。
+
+```env
+COURSE_DATABASE_URL=postgresql://user:password@localhost:5432/mentra
+STUDENT_AGENT_API_KEY=replace-with-a-long-random-secret
+```
+
+初始化或迁移课程数据：
+
+```bash
+pnpm migrate:course-postgres
+```
+
+可通过 `GET /api/health` 检查数据库能力及连接状态。课程写入、课时文件与附件关联、教学产物及课堂快照采用事务化写入，避免只保存产物索引而丢失课件本体。
+
+学生智能体使用服务端 Bearer Token 访问只读接口；接口只返回已发布课程、可用课时文件、已发布知识包/知识图谱及允许访问的教学产物：
+
+```http
+GET /api/student-agent/v1/courses/{courseId}
+Authorization: Bearer <STUDENT_AGENT_API_KEY>
+```
+
+相关接口还包括：
+
+- `GET /api/student-agent/v1/courses/{courseId}/artifacts/{artifactId}`：读取指定教学产物；
+- `GET /api/student-agent/v1/courses/{courseId}/classrooms/{classroomId}`：读取完整课堂与课件场景数据。
+
+完整字段、鉴权、状态码、调用示例和学生智能体接入流程见 [学生智能体课程数据 API](docs/STUDENT_AGENT_COURSE_API.md)。数据库实现和迁移说明见 [课程存储实现摘要](docs/COURSE_STORAGE_IMPLEMENTATION_SUMMARY.md) 与 [课程存储迁移指南](docs/COURSE_STORAGE_MIGRATION.md)。
+
+> [!IMPORTANT]
+> `STUDENT_AGENT_API_KEY` 是服务端密钥，不能放入浏览器代码。SaaS 部署时应将当前共享 Token 替换为租户身份认证，并在服务端校验课程发布状态、租户、角色和授权范围。
+
 
 ## 🗞️ News
 
@@ -86,7 +160,7 @@ https://github.com/user-attachments/assets/b4ab35ac-f994-46b1-8957-e82fe87ff0e9
 
 ### Prerequisites
 
-- **Node.js** >= 20
+- **Node.js** >= 22.19
 - **pnpm** >= 10
 
 ### 1. Clone & Install
@@ -288,6 +362,8 @@ docker compose up --build
 ```
 
 ### Server-backed persistence (PostgreSQL)
+
+> 本平台包含两层服务端持久化：OpenMAIC 通用运行时/文档存储，以及课程工程数据存储。课程工程层可通过 `COURSE_DATABASE_URL` 使用独立数据库；若未设置，则复用 `DATABASE_URL`。学生智能体接口依赖课程工程层，生产环境请同时设置 `STUDENT_AGENT_API_KEY`。详细说明见上方“数据存储与学生智能体接口”。
 
 The `server-persistence` profile runs exactly two containers: the OpenMAIC app
 and PostgreSQL. The persistence HTTP server is embedded in the app at
@@ -757,16 +833,21 @@ We welcome contributions from the community! Whether it's bug reports, feature i
 OpenMAIC/
 ├── app/                        # Next.js App Router
 │   ├── api/                    #   Server API routes (~18 endpoints)
+│   │   ├── course-space/       #     课程工程、材料、知识图谱与教师智能体 API
+│   │   ├── student-agent/v1/   #     面向学生智能体的已发布课程只读 API
 │   │   ├── generate/           #     Scene generation pipeline (outlines, content, images, TTS …)
 │   │   ├── generate-classroom/ #     Async classroom job submission + polling
 │   │   ├── chat/               #     Multi-agent discussion (SSE streaming)
 │   │   ├── pbl/                #     Project-Based Learning endpoints
 │   │   └── ...                 #     quiz-grade, parse-pdf, web-search, transcription, etc.
 │   ├── classroom/[id]/         #   Classroom playback page
+│   ├── course-space/           #   课程中心与教师课程工作区
 │   └── page.tsx                #   Home page (generation input)
 │
 ├── lib/                        # Core business logic
 │   ├── generation/             #   Two-stage lesson generation pipeline
+│   ├── course-space/           #   课程树、教学产物格式与教师操作意图
+│   ├── server/                 #   PostgreSQL/文件存储、课程操作与智能体服务
 │   ├── orchestration/          #   LangGraph multi-agent orchestration (director graph)
 │   ├── playback/               #   Playback state machine (idle → playing → live)
 │   ├── action/                 #   Action execution engine (speech, whiteboard, effects)
@@ -782,6 +863,7 @@ OpenMAIC/
 │   └── ...                     #   prosemirror, storage, pdf, web-search, utils
 │
 ├── components/                 # React UI components
+│   ├── course-space/           #   课程中心、专业课件工作区与备课智能体
 │   ├── slide-renderer/         #   Canvas-based slide editor & renderer
 │   │   ├── Editor/Canvas/      #     Interactive editing canvas
 │   │   └── components/element/ #     Element renderers (text, image, shape, table, chart …)
@@ -804,6 +886,8 @@ OpenMAIC/
 │       └── references/         #   On-demand SOP sections
 │
 ├── configs/                    # Shared constants (shapes, fonts, hotkeys, themes …)
+├── docs/                       # 课程存储、迁移及学生智能体接口文档
+├── scripts/                    # 数据迁移与维护脚本
 └── public/                     # Static assets (logos, avatars)
 ```
 
@@ -813,6 +897,8 @@ OpenMAIC/
 - **Multi-Agent Orchestration** (`lib/orchestration/`) — LangGraph state machine managing agent turns and discussions
 - **Playback Engine** (`lib/playback/`) — State machine driving classroom playback and live interaction
 - **Action Engine** (`lib/action/`) — Executes 28+ action types (speech, whiteboard draw/text/shape/chart, spotlight, laser …)
+- **Course Engineering** (`lib/course-space/`, `components/course-space/`) — Organizes materials, graph knowledge, lesson files and generated artifacts around a course hierarchy
+- **Course Data Layer** (`lib/server/course-space-database.ts`) — PostgreSQL-first storage with a development file fallback and student-agent read APIs
 
 ### How to Contribute
 

@@ -781,10 +781,11 @@ function GenerationPreviewContent() {
               currentSession.pptContentDraft,
             );
             if (fallbackOutlines.length > 0) {
-              const reason = outlineError instanceof Error
-                ? outlineError.message
-                : String(outlineError);
-              log.warn(`Course-space outline model failed; using reviewed-page fallback: ${reason}`);
+              const reason =
+                outlineError instanceof Error ? outlineError.message : String(outlineError);
+              log.warn(
+                `Course-space outline model failed; using reviewed-page fallback: ${reason}`,
+              );
               setTruncationWarnings((warnings) => [
                 ...warnings,
                 'AI 大纲服务本次未返回内容，已根据教师审核后的页面自动生成逐页大纲；您仍可在下一步修改。',
@@ -792,7 +793,9 @@ function GenerationPreviewContent() {
               return {
                 outlines: fallbackOutlines,
                 languageDirective: '使用中文授课，忠实解释教师审核后的页面内容。',
-                courseTitle: currentSession.requirements.requirement.replace(/\s+/g, ' ').slice(0, 60),
+                courseTitle: currentSession.requirements.requirement
+                  .replace(/\s+/g, ' ')
+                  .slice(0, 60),
                 taskEngineMode: false,
               };
             }
@@ -1275,10 +1278,30 @@ function GenerationPreviewContent() {
       await store.saveToStorage();
 
       // A classroom launched from the full-course workspace belongs to that
-      // course scope. Persist the relationship before removing the session so
-      // it never falls back to the quick-generation/unfiled collection.
+      // course scope. Browser persistence is not visible to the server-side
+      // course archive, so persist the classroom body first and only then
+      // create its course artifact index. This ordering prevents a classroom
+      // id from becoming a dangling artifact when server persistence is used.
       if (currentSession.courseSpaceContext) {
         const { courseId, scope } = currentSession.courseSpaceContext;
+        const classroomSnapshot = useStageStore.getState();
+        if (!classroomSnapshot.stage || classroomSnapshot.scenes.length === 0) {
+          throw new Error('课件场景尚未生成，无法保存到当前课程');
+        }
+        const persistResponse = await fetch('/api/classroom', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            stage: classroomSnapshot.stage,
+            scenes: classroomSnapshot.scenes,
+          }),
+        });
+        if (!persistResponse.ok) {
+          const result = (await persistResponse.json().catch(() => undefined)) as
+            | { error?: string; message?: string }
+            | undefined;
+          throw new Error(result?.error || result?.message || '课件本体保存失败，请重试');
+        }
         const response = await fetch(`/api/course-space/${courseId}/classrooms/attach`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -1289,7 +1312,9 @@ function GenerationPreviewContent() {
           }),
         });
         if (!response.ok) {
-          const result = await response.json().catch(() => undefined) as { error?: string } | undefined;
+          const result = (await response.json().catch(() => undefined)) as
+            | { error?: string }
+            | undefined;
           throw new Error(result?.error || '课件已生成，但归档到当前课程失败');
         }
       }
@@ -1305,7 +1330,9 @@ function GenerationPreviewContent() {
       }
       if (!generationSession.courseSpaceContext) {
         sessionStorage.removeItem('generationSession');
-        await removeImportedPptSlides(generationSession.pptxImportStorageKey).catch(() => undefined);
+        await removeImportedPptSlides(generationSession.pptxImportStorageKey).catch(
+          () => undefined,
+        );
       }
       setError(err instanceof Error ? err.message : String(err));
     }

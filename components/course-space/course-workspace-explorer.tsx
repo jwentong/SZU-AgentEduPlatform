@@ -19,6 +19,7 @@ import type {
   CourseArtifactRecord,
   CourseArtifactType,
   CourseLessonFile,
+  CourseMaterialRecord,
   CourseSpace,
 } from '@/lib/course-space';
 import type { TeacherOperationPlan } from '@/lib/course-space/teacher-agent-intent';
@@ -32,9 +33,10 @@ type Scope =
 type BrowserFile = {
   id: string;
   title: string;
-  kind: 'artifact';
+  kind: 'artifact' | 'material';
   artifact?: CourseArtifactRecord;
   courseFile?: CourseLessonFile;
+  material?: CourseMaterialRecord;
   scope: Scope;
 };
 const artifactPriority = (artifact: CourseArtifactRecord) =>
@@ -114,6 +116,7 @@ export function CourseWorkspaceExplorer({
   const explicitlySelectedCourseFile = course.modules
     .flatMap((module) => module.lessons.flatMap((lesson) => lesson.files ?? []))
     .find((item) => item.id === selectedFileId);
+  const explicitlySelectedMaterial = course.materials.find((item) => item.id === selectedFileId);
   const selectedFile: BrowserFile | undefined = explicitlySelectedArtifact
     ? {
         id: explicitlySelectedArtifact.id,
@@ -130,7 +133,15 @@ export function CourseWorkspaceExplorer({
           courseFile: explicitlySelectedCourseFile,
           scope,
         }
-      : files[0];
+      : explicitlySelectedMaterial
+        ? {
+            id: explicitlySelectedMaterial.id,
+            title: explicitlySelectedMaterial.name,
+            kind: 'material',
+            material: explicitlySelectedMaterial,
+            scope,
+          }
+        : files[0];
   const selectScope = (next: Scope) => {
     setScope(next);
     setSelectedFileId('');
@@ -382,7 +393,11 @@ export function CourseWorkspaceExplorer({
                             artifact.scope.lessonId === lesson.id,
                         );
                         const structureFiles = lesson.files ?? [];
-                        const fileCount = artifactFiles.length + structureFiles.length;
+                        const lessonMaterials = course.materials.filter((material) =>
+                          lesson.materialIds.includes(material.id),
+                        );
+                        const fileCount =
+                          artifactFiles.length + structureFiles.length + lessonMaterials.length;
                         const isExpanded = expandedLessons.has(lesson.id);
                         return (
                           <div key={lesson.id}>
@@ -424,6 +439,20 @@ export function CourseWorkspaceExplorer({
                             </div>
                             {isExpanded && fileCount > 0 && (
                               <div className="ml-5 border-l pl-2">
+                                {lessonMaterials.map((material) => (
+                                  <button
+                                    key={material.id}
+                                    title={material.name}
+                                    onClick={() => {
+                                      setScope({ type: 'lesson', lessonId: lesson.id });
+                                      setSelectedFileId(material.id);
+                                    }}
+                                    className={`my-0.5 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] ${selectedFileId === material.id ? 'bg-[#B00055]/10 font-medium text-[#8F0046]' : 'text-slate-500 hover:bg-slate-100'}`}
+                                  >
+                                    <Presentation className="size-3.5 shrink-0 text-orange-500" />
+                                    <span className="truncate">{material.name}</span>
+                                  </button>
+                                ))}
                                 {structureFiles.map((file) => (
                                   <button
                                     key={file.id}
@@ -496,6 +525,44 @@ export function CourseWorkspaceExplorer({
                 srcDoc={`<!doctype html><html><head><meta charset="utf-8"><style>body{font:16px/1.75 system-ui;color:#172033;max-width:960px;margin:0 auto;padding:42px}h1,h2,h3{color:#101828}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:8px}</style></head><body>${selectedFile.artifact.htmlContent || `<h1>${selectedFile.artifact.title}</h1><pre>${selectedFile.artifact.content}</pre>`}</body></html>`}
                 className="h-full w-full rounded-xl border bg-white shadow-sm"
               />
+            ) : selectedFile?.material ? (
+              <div className="flex h-full items-center justify-center rounded-xl border bg-white p-8 shadow-sm">
+                <div className="w-full max-w-xl rounded-3xl border border-[#B00055]/15 bg-gradient-to-br from-white to-[#fff6fa] p-8 shadow-[0_20px_55px_-35px_rgba(176,0,85,.45)]">
+                  <div className="mb-5 grid size-14 place-items-center rounded-2xl bg-[#B00055]/10 text-[#B00055]">
+                    <Presentation className="size-7" />
+                  </div>
+                  <p className="text-xs font-medium uppercase tracking-[.18em] text-[#B00055]">
+                    课程源材料
+                  </p>
+                  <h2 className="mt-2 text-2xl font-semibold text-slate-900">
+                    {selectedFile.material.name}
+                  </h2>
+                  <div className="mt-5 flex flex-wrap gap-2 text-xs text-slate-500">
+                    <span className="rounded-full bg-slate-100 px-3 py-1.5">
+                      {selectedFile.material.pageCount ?? 0} 页
+                    </span>
+                    <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-emerald-700">
+                      {selectedFile.material.status === 'ready'
+                        ? '已完成解析'
+                        : selectedFile.material.status}
+                    </span>
+                  </div>
+                  <p className="mt-5 text-sm leading-7 text-slate-600">
+                    该 PPT 已归档到当前周课时文件夹，知识抽取、课件生成和备课智能体仍通过材料 ID
+                    保留来源引用。
+                  </p>
+                  <Button className="mt-7 bg-[#B00055] hover:bg-[#8F0046]" asChild>
+                    <a
+                      href={`/api/course-space/${course.id}/materials/${selectedFile.material.id}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      打开或下载原始 PPT
+                      <ExternalLink className="ml-2 size-4" />
+                    </a>
+                  </Button>
+                </div>
+              </div>
             ) : selectedFile?.courseFile ? (
               <iframe
                 title={selectedFile.title}
