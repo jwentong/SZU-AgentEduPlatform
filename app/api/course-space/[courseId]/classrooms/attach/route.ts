@@ -8,6 +8,7 @@ import {
   updateServerCourse,
 } from '@/lib/server/course-space-storage';
 import type { CourseArtifactJob, CourseArtifactRecord } from '@/lib/course-space/types';
+import { readClassroom } from '@/lib/server/classroom-storage';
 
 type ClassroomInput = { id: string; title?: string };
 
@@ -36,20 +37,20 @@ export async function POST(req: NextRequest, context: { params: Promise<{ course
   let scope = body.scope;
   let savedCourse = course;
   if (!scope && body.moduleTitle && body.lessonTitle) {
-    const module = course.modules.find((item) => item.title === body.moduleTitle);
-    if (!module) return apiError('INVALID_REQUEST', 404, '目标课程模块不存在');
-    let lesson = module.lessons.find((item) => item.title === body.lessonTitle);
+    const courseModule = course.modules.find((item) => item.title === body.moduleTitle);
+    if (!courseModule) return apiError('INVALID_REQUEST', 404, '目标课程模块不存在');
+    let lesson = courseModule.lessons.find((item) => item.title === body.lessonTitle);
     if (!lesson) {
       const now = Date.now();
       lesson = {
-        id: nanoid(10), moduleId: module.id, title: body.lessonTitle.trim(),
-        order: module.lessons.length + 1, objectives: [], materialIds: [],
+        id: nanoid(10), moduleId: courseModule.id, title: body.lessonTitle.trim(),
+        order: courseModule.lessons.length + 1, objectives: [], materialIds: [],
         createdAt: now, updatedAt: now,
       };
       const lessonToAdd = lesson;
       savedCourse = await updateServerCourse(courseId, (current) => ({
         ...current,
-        modules: current.modules.map((item) => item.id === module.id
+        modules: current.modules.map((item) => item.id === courseModule.id
           ? { ...item, lessons: [...item.lessons, lessonToAdd], updatedAt: now }
           : item),
       }));
@@ -67,6 +68,9 @@ export async function POST(req: NextRequest, context: { params: Promise<{ course
   const now = Date.now();
   const artifacts: CourseArtifactRecord[] = [];
   for (const classroom of classrooms) {
+    if (!await readClassroom(classroom.id)) {
+      return apiError('INVALID_REQUEST', 404, `课堂 ${classroom.id} 的课件本体不存在，不能建立悬空产物索引`);
+    }
     const duplicate = existing.find((item) => item.classroomId === classroom.id);
     if (duplicate) {
       const updated = await saveCourseArtifact({ ...duplicate, scope, updatedAt: now });

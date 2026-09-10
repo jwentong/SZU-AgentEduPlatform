@@ -5,10 +5,12 @@ import {
   getServerVideoProviders,
   getServerTTSProviders,
 } from '@/lib/server/provider-config';
+import { getCourseDatabaseHealth } from '@/lib/server/course-space-database';
 
 const version = process.env.npm_package_version || '0.1.0';
 
 export async function GET() {
+  const courseDatabase = await getCourseDatabaseHealth();
   return apiSuccess({
     status: 'ok',
     version,
@@ -17,6 +19,7 @@ export async function GET() {
       imageGeneration: Object.keys(getServerImageProviders()).length > 0,
       videoGeneration: Object.keys(getServerVideoProviders()).length > 0,
       tts: Object.values(getServerTTSProviders()).some((info) => !info.disabled),
+      courseDatabase,
     },
   });
 }

@@ -20,6 +20,8 @@ export type TeacherWorkspaceAction =
       lessonIds: string[];
       fileTypes: CourseLessonFileType[];
       label: string;
+      populateContent?: boolean;
+      instruction?: string;
     }
   | { type: 'move-artifacts'; fromLessonId: string; toLessonId: string; label: string }
   | { type: 'delete-artifact'; artifactTitle: string; label: string }
@@ -177,6 +179,9 @@ export function planTeacherWorkspaceOperation(
       ? Number(lessonFileRange[1])
       : ordinal(normalized.match(/第([一二三四五六七八九十\d]+)周/u)?.[1]);
     const end = lessonFileRange ? Number(lessonFileRange[2]) : start;
+    const populateContent =
+      /生成|具体内容|根据课程材料|完善|填写|写入/u.test(normalized) &&
+      !/(?:创建|建立|添加)(?:空白|空的?|结构化)?(?:文件|文件夹|目录)/u.test(normalized);
     const targets = course.modules
       .flatMap((module) => module.lessons)
       .filter((lesson) => {
@@ -188,14 +193,18 @@ export function planTeacherWorkspaceOperation(
         id,
         kind: 'create-lesson-files',
         title: `创建${requestedLessonFiles.map((item) => item.label).join('、')}文件`,
-        summary: `将在${targets[0].title}至${targets[targets.length - 1].title}的 ${targets.length} 个课时文件夹中分别创建 ${requestedLessonFiles.length} 类结构化文件；已有同类型文件将保留。`,
-        requiresConfirmation: true,
+        summary: populateContent
+          ? `将依据课程材料，为${targets[0].title}至${targets[targets.length - 1].title}生成 ${requestedLessonFiles.length} 类教学内容；已有同类型文件将更新正文。`
+          : `将在${targets[0].title}至${targets[targets.length - 1].title}的 ${targets.length} 个课时文件夹中分别创建 ${requestedLessonFiles.length} 类结构化文件；已有同类型文件将保留。`,
+        requiresConfirmation: !populateContent,
         status: 'planned',
         action: {
           type: 'create-lesson-files',
           lessonIds: targets.map((lesson) => lesson.id),
           fileTypes: requestedLessonFiles.map((item) => item.type),
           label: '批量创建课时结构文件',
+          populateContent,
+          instruction: normalized,
         },
         steps: [
           {
@@ -462,14 +471,23 @@ export function planTeacherWorkspaceOperation(
   }
   const action = detectTeacherWorkspaceAction(normalized);
   if (!action) return undefined;
-  action.scope = targetModule ? { type: 'module', moduleId: targetModule.id } : { type: 'course' };
+  const requestedLesson = findLessonByOrdinal(
+    course,
+    normalized.match(/第([一二三四五六七八九十\d]+)(?:周|课时)/u)?.[1],
+  );
+  action.scope = requestedLesson
+    ? { type: 'lesson', lessonId: requestedLesson.lesson.id }
+    : targetModule
+      ? { type: 'module', moduleId: targetModule.id }
+      : { type: 'course' };
   action.instruction = normalized;
+  const scopeTitle = requestedLesson?.lesson.title ?? targetModule?.title;
   return {
     id,
     kind: 'generate-artifact',
     title: `生成${action.label}`,
-    summary: `${targetModule ? `范围：${targetModule.title}；` : ''}进入标准生成—审核—发布工作流。`,
-    requiresConfirmation: true,
+    summary: `${scopeTitle ? `范围：${scopeTitle}；` : ''}进入标准生成—审核—发布工作流。`,
+    requiresConfirmation: false,
     status: 'planned',
     action,
     steps: [

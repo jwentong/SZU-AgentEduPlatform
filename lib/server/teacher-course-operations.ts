@@ -1,11 +1,63 @@
 import type { TeacherOperationPlan } from '@/lib/course-space/teacher-agent-intent';
+import { callLLM } from '@/lib/ai/llm';
+import { resolveModel } from '@/lib/server/resolve-model';
 import {
   deleteCourseArtifact,
   listCourseArtifacts,
   readServerCourse,
+  readMaterialExtraction,
   saveCourseArtifact,
   updateServerCourse,
 } from './course-space-storage';
+
+const lessonFileTitles = {
+  'lesson-objectives': '课时目标',
+  'knowledge-points': '知识点',
+  'teaching-activities': '教学活动',
+  'courseware-pages': '课件页面',
+  'narration-segments': '讲稿片段',
+  exercises: '习题',
+  'assessment-criteria': '评价指标',
+} as const;
+
+async function generateLessonFileContent(
+  course: NonNullable<Awaited<ReturnType<typeof readServerCourse>>>,
+  lessonTitle: string,
+  fileTypes: Array<keyof typeof lessonFileTitles>,
+  instruction?: string,
+) {
+  const extractions = (
+    await Promise.all(course.materials.map((material) => readMaterialExtraction(material.id)))
+  ).filter((item): item is NonNullable<typeof item> => Boolean(item));
+  const sources = extractions
+    .flatMap((item) =>
+      item.chunks
+        .slice(0, 30)
+        .map(
+          (chunk) =>
+            `[material:${item.materialId} page:${chunk.page}] ${chunk.text.replace(/\s+/g, ' ')}`,
+        ),
+    )
+    .join('\n')
+    .slice(0, 30000);
+  const { model, thinkingConfig } = await resolveModel({ stage: 'generate-classroom' });
+  const result = await callLLM(
+    {
+      model,
+      system:
+        '你是课程工程智能体。请严格依据教师材料生成可直接写入课程文件的内容，关键结论保留材料页码引用。只输出合法 JSON 对象，不要使用代码围栏。',
+      prompt: `课程：${course.title}\n课时：${lessonTitle}\n教师要求：${instruction || '生成课时结构内容'}\n需要字段：${fileTypes.join(', ')}\nJSON 键必须使用上述英文类型，值为 Markdown 字符串。\n\n教师材料：\n${sources || '暂无可解析材料，请依据已有课程结构形成待教师审核的草稿。'}`,
+    },
+    'lesson-file-content-generation',
+    { retries: 1 },
+    thinkingConfig,
+  );
+  const raw = result.text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '');
+  return JSON.parse(raw) as Partial<Record<keyof typeof lessonFileTitles, string>>;
+}
 
 export async function executeReadOnlyTeacherPlan(
   courseId: string,
@@ -146,16 +198,28 @@ export async function executeConfirmedTeacherPlan(
   }
   if (plan.kind === 'create-lesson-files' && plan.action?.type === 'create-lesson-files') {
     const action = plan.action;
-    const titles = {
-      'lesson-objectives': '课时目标',
-      'knowledge-points': '知识点',
-      'teaching-activities': '教学活动',
-      'courseware-pages': '课件页面',
-      'narration-segments': '讲稿片段',
-      exercises: '习题',
-      'assessment-criteria': '评价指标',
-    } as const;
     let created = 0;
+    let populated = 0;
+    const currentCourse = await readServerCourse(courseId);
+    if (!currentCourse) throw new Error('课程不存在');
+    const generatedByLesson = new Map<
+      string,
+      Partial<Record<keyof typeof lessonFileTitles, string>>
+    >();
+    if (action.populateContent) {
+      for (const lesson of currentCourse.modules.flatMap((module) => module.lessons)) {
+        if (!action.lessonIds.includes(lesson.id)) continue;
+        generatedByLesson.set(
+          lesson.id,
+          await generateLessonFileContent(
+            currentCourse,
+            lesson.title,
+            action.fileTypes,
+            action.instruction,
+          ),
+        );
+      }
+    }
     await updateServerCourse(courseId, (course) => {
       const knownLessons = new Set(
         course.modules.flatMap((module) => module.lessons.map((lesson) => lesson.id)),
@@ -171,20 +235,28 @@ export async function executeConfirmedTeacherPlan(
           lessons: module.lessons.map((lesson) => {
             if (!action.lessonIds.includes(lesson.id)) return lesson;
             const existing = new Set((lesson.files ?? []).map((file) => file.type));
+            const generated = generatedByLesson.get(lesson.id) ?? {};
             const additions = action.fileTypes
               .filter((type) => !existing.has(type))
               .map((type, index) => ({
                 id: `lesson_file_${now.toString(36)}_${lesson.id}_${index}`,
                 lessonId: lesson.id,
                 type,
-                title: titles[type],
-                content: '',
-                status: 'draft' as const,
+                title: lessonFileTitles[type],
+                content: generated[type]?.trim() || '',
+                status: generated[type]?.trim() ? ('ready' as const) : ('draft' as const),
                 createdAt: now,
                 updatedAt: now,
               }));
             created += additions.length;
-            return { ...lesson, updatedAt: now, files: [...(lesson.files ?? []), ...additions] };
+            const updatedFiles = (lesson.files ?? []).map((file) => {
+              const content = generated[file.type]?.trim();
+              if (!content || !action.fileTypes.includes(file.type)) return file;
+              populated += 1;
+              return { ...file, content, status: 'ready' as const, updatedAt: now };
+            });
+            populated += additions.filter((file) => file.content).length;
+            return { ...lesson, updatedAt: now, files: [...updatedFiles, ...additions] };
           }),
         })),
       };
@@ -193,7 +265,9 @@ export async function executeConfirmedTeacherPlan(
       plan: {
         ...plan,
         status: 'completed',
-        result: `已创建 ${created} 个课时结构文件；已有同类型文件已自动跳过。`,
+        result: action.populateContent
+          ? `已创建 ${created} 个课时结构文件，并写入或更新 ${populated} 个文件的具体内容。`
+          : `已创建 ${created} 个课时结构文件；已有同类型文件已自动跳过。`,
         steps: plan.steps.map((step) => ({ ...step, status: 'completed' })),
       },
     };

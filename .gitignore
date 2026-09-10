@@ -77,6 +77,7 @@ next-env.d.ts
 
 # Local integration documentation (keep generated/temporary docs ignored).
 /docs/*
+!/docs/STUDENT_AGENT_COURSE_API.md
 !/docs/course-data-api-v1.md
 # Eval results
 eval/whiteboard-layout/results/

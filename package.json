@@ -34,7 +34,8 @@
     "migrate:courses": "tsx scripts/migrate-course-storage.ts",
     "migrate:courses:dry-run": "tsx scripts/migrate-course-storage.ts --dry-run",
     "validate:courses": "tsx scripts/validate-course-storage.ts --report",
-    "validate:courses:export": "tsx scripts/validate-course-storage.ts --export ./course-data-export"
+    "validate:courses:export": "tsx scripts/validate-course-storage.ts --export ./course-data-export",
+    "migrate:course-postgres": "tsx scripts/migrate-course-postgres.ts"
   },
   "dependencies": {
     "@ai-sdk/amazon-bedrock": "^4.0.103",

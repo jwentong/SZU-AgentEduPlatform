@@ -15,6 +15,15 @@ import type {
 import { markdownToArtifactHtml, WORD_ARTIFACT_TYPES } from '@/lib/course-space/artifact-formats';
 import { buildCourseArtifactDocx } from '@/lib/server/course-artifact-docx';
 import { getCourseSpaceStorageAdapter } from '@/lib/server/course-space-storage-adapter';
+import {
+  listCoursesFromDatabase,
+  readArtifactFileFromDatabase,
+  readCourseFromDatabase,
+  readCourseArtifactFromDatabase,
+  readCourseMaterialFileFromDatabase,
+  upsertArtifactFileDatabaseRecord,
+  upsertCourseMaterialFileDatabaseRecord,
+} from '@/lib/server/course-space-database';
 
 const databaseAdapter = getCourseSpaceStorageAdapter();
 
@@ -73,6 +82,8 @@ async function listJson<T>(dir: string): Promise<T[]> {
 }
 
 export async function listServerCourses(teacherId: string): Promise<CourseSpace[]> {
+  const databaseCourses = await listCoursesFromDatabase(teacherId);
+  if (databaseCourses) return databaseCourses;
   return (await listJson<CourseSpace>(COURSES_DIR))
     .filter((course) => course.teacherId === teacherId)
     .sort((a, b) => b.updatedAt - a.updatedAt);
@@ -80,6 +91,8 @@ export async function listServerCourses(teacherId: string): Promise<CourseSpace[
 
 export async function readServerCourse(courseId: string): Promise<CourseSpace | null> {
   assertId(courseId, 'course id');
+  const databaseCourse = await readCourseFromDatabase(courseId);
+  if (databaseCourse) return databaseCourse;
   return readJson<CourseSpace>(path.join(COURSES_DIR, `${courseId}.json`));
 }
 
@@ -154,10 +167,21 @@ export async function storeCourseMaterial(input: {
     ...course,
     materials: [...course.materials, record],
   }));
+  await upsertCourseMaterialFileDatabaseRecord({
+    storageKey: record.storageKey,
+    materialId: record.id,
+    courseId: record.courseId,
+    fileName: record.name,
+    mimeType: record.mimeType,
+    bytes: input.bytes,
+    sha256: record.sha256!,
+  });
   return record;
 }
 
 export async function readCourseMaterialBytes(record: CourseMaterialRecord): Promise<Buffer> {
+  const databaseBytes = await readCourseMaterialFileFromDatabase(record.storageKey);
+  if (databaseBytes) return databaseBytes;
   const resolved = path.resolve(MATERIALS_DIR, record.storageKey);
   if (!resolved.startsWith(path.resolve(MATERIALS_DIR) + path.sep)) throw new Error('Invalid material path');
   return fs.readFile(resolved);
@@ -216,10 +240,25 @@ export async function saveCourseArtifactFile(artifactId: string, fileName: strin
   const dir = path.join(ARTIFACT_FILES_DIR, artifactId);
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, safeName), bytes);
-  return `${artifactId}/${safeName}`;
+  const storageKey = `${artifactId}/${safeName}`;
+  const extension = path.extname(safeName).toLowerCase();
+  const mimeType = extension === '.docx'
+    ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    : extension === '.pdf' ? 'application/pdf' : 'application/octet-stream';
+  await upsertArtifactFileDatabaseRecord({
+    storageKey,
+    artifactId,
+    fileName: safeName,
+    mimeType,
+    bytes,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+  });
+  return storageKey;
 }
 
 export async function readCourseArtifactFile(storageKey: string) {
+  const databaseFile = await readArtifactFileFromDatabase(storageKey);
+  if (databaseFile) return databaseFile.bytes;
   const resolved = path.resolve(ARTIFACT_FILES_DIR, storageKey);
   if (!resolved.startsWith(path.resolve(ARTIFACT_FILES_DIR) + path.sep)) throw new Error('Invalid artifact file path');
   return fs.readFile(resolved);
@@ -227,6 +266,8 @@ export async function readCourseArtifactFile(storageKey: string) {
 
 export async function readCourseArtifact(artifactId: string) {
   assertId(artifactId, 'artifact id');
+  const databaseArtifact = await readCourseArtifactFromDatabase(artifactId);
+  if (databaseArtifact) return databaseArtifact;
   return readJson<CourseArtifactRecord>(path.join(ARTIFACTS_DIR, `${artifactId}.json`));
 }
 
@@ -282,4 +323,10 @@ export async function listKnowledgePackages(courseId: string) {
   return (await listJson<PublishedKnowledgePackage>(KNOWLEDGE_DIR))
     .filter((pkg) => pkg.courseId === courseId)
     .sort((a, b) => b.version - a.version);
+}
+
+export async function readPublishedKnowledgePackage(courseId: string) {
+  const databasePackage = await databaseAdapter.readPublishedKnowledgePackage(courseId);
+  if (databasePackage) return databasePackage;
+  return (await listKnowledgePackages(courseId)).find((pkg) => pkg.status === 'published');
 }

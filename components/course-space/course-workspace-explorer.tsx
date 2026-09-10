@@ -22,6 +22,7 @@ import type {
   CourseSpace,
 } from '@/lib/course-space';
 import type { TeacherOperationPlan } from '@/lib/course-space/teacher-agent-intent';
+import { markdownToArtifactHtml } from '@/lib/course-space/artifact-formats';
 import { nanoid } from 'nanoid';
 
 type Scope =
@@ -498,7 +499,19 @@ export function CourseWorkspaceExplorer({
             ) : selectedFile?.courseFile ? (
               <iframe
                 title={selectedFile.title}
-                srcDoc={`<!doctype html><html><head><meta charset="utf-8"><style>body{font:16px/1.75 system-ui;color:#172033;max-width:900px;margin:0 auto;padding:48px}h1{font-size:28px}p{color:#667085}.empty{margin-top:28px;padding:24px;border:1px dashed #d0d5dd;border-radius:16px;background:#f8fafc}</style></head><body><h1>${selectedFile.courseFile.title}</h1>${selectedFile.courseFile.content ? `<div>${selectedFile.courseFile.content}</div>` : '<div class="empty"><strong>文件已创建</strong><p>当前内容为空，可由备课工作智能体结合课程材料与知识图谱继续完善。</p></div>'}</body></html>`}
+                srcDoc={`<!doctype html><html><head><meta charset="utf-8"><style>
+                  *{box-sizing:border-box}body{margin:0;background:linear-gradient(145deg,#fff 0%,#fff9fc 100%);font:15px/1.75 system-ui,-apple-system,"Segoe UI",sans-serif;color:#344054}
+                  main{max-width:980px;margin:0 auto;padding:42px 48px 64px}h1{margin:0 0 28px;font-size:30px;line-height:1.25;color:#101828;letter-spacing:-.02em}
+                  h1:after{content:"";display:block;width:44px;height:4px;margin-top:14px;border-radius:999px;background:#B00055}
+                  h2,h3{margin:30px 0 12px;color:#8F0046}h3{font-size:17px;padding-left:12px;border-left:3px solid #d678a5}
+                  p{margin:10px 0;color:#475467}ul,ol{display:grid;gap:10px;margin:12px 0 24px;padding:0;list-style:none;counter-reset:item}
+                  li{position:relative;padding:13px 18px 13px 46px;border:1px solid #f1d8e5;border-radius:14px;background:#fff;box-shadow:0 5px 18px rgba(79,20,49,.045)}
+                  ul li:before{content:"";position:absolute;left:20px;top:22px;width:8px;height:8px;border-radius:50%;background:#B00055;box-shadow:0 0 0 5px #faeaf2}
+                  ol li{counter-increment:item}ol li:before{content:counter(item);position:absolute;left:14px;top:12px;display:grid;place-items:center;width:24px;height:24px;border-radius:8px;background:#faeaf2;color:#9f004d;font-size:12px;font-weight:700}
+                  strong{color:#101828}.source-citation{display:inline-flex;margin-left:4px;padding:1px 7px;border-radius:999px;background:#fff0f6;color:#9f004d;font-size:11px;white-space:nowrap}
+                  .empty{margin-top:28px;padding:24px;border:1px dashed #d0d5dd;border-radius:16px;background:#f8fafc}
+                  @media(max-width:700px){main{padding:28px 22px}li{padding-right:14px}}
+                </style></head><body><main>${selectedFile.courseFile.content ? markdownToArtifactHtml(`# ${selectedFile.courseFile.title}\n\n${selectedFile.courseFile.content}`) : `<h1>${selectedFile.courseFile.title}</h1><div class="empty"><strong>文件已创建</strong><p>当前内容为空，可由备课工作智能体结合课程材料与知识图谱继续完善。</p></div>`}</main></body></html>`}
                 className="h-full w-full rounded-xl border bg-white shadow-sm"
               />
             ) : (

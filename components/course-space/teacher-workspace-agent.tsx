@@ -1,16 +1,21 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Bot, CheckCircle2, Circle, LoaderCircle, Play, Send } from 'lucide-react';
+import { Bot, CheckCircle2, Circle, ImagePlus, LoaderCircle, Play, Send, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type { CourseArtifactJob, CourseArtifactType, CourseSpace } from '@/lib/course-space';
 import type { TeacherOperationPlan } from '@/lib/course-space/teacher-agent-intent';
 
 type Message = { role: 'user' | 'assistant'; content: string; plan?: TeacherOperationPlan };
+type ScreenshotAttachment = { name: string; mimeType: string; dataUrl: string };
 
 const actions: Array<{ type: CourseArtifactType; label: string }> = [
   { type: 'course-outline', label: '教学大纲' },
+  { type: 'module-plan', label: '教学计划' },
   { type: 'lesson-courseware', label: '课件' },
+  { type: 'narration', label: '讲稿' },
+  { type: 'exercise-set', label: '习题' },
+  { type: 'assessment-rubric', label: '评分量规' },
 ];
 
 export function TeacherWorkspaceAgent({
@@ -26,12 +31,40 @@ export function TeacherWorkspaceAgent({
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
-      content: `你好，我是“${course.title}”的课程操作智能体。课程材料、结构与中间产物已作为插件接入。我可以批量创建课时目标、知识点、教学活动等结构文件，也可以移动、删除课程文件并调用标准工作流生成课件。所有结构变更与删除操作都会先提交计划供你确认。`,
+      content: `你好，我是“${course.title}”的课程操作智能体。课程材料、结构、知识图谱与中间产物已作为插件接入。我可以按你的要求启动教学大纲、教学计划、课件、讲稿、习题和评分量规工作，也可以创建、移动或删除课程文件。生成任务会直接进入标准生成—审核—可视化流程；结构变更与删除操作会先提交计划供你确认。`,
     },
   ]);
   const [input, setInput] = useState('');
+  const [attachments, setAttachments] = useState<ScreenshotAttachment[]>([]);
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState('DeepSeek Harness');
+  const addImageFiles = (incoming: File[]) => {
+    const files = incoming
+      .filter(
+        (file) =>
+          ['image/png', 'image/jpeg', 'image/webp'].includes(file.type) &&
+          file.size <= 5 * 1024 * 1024,
+      )
+      .slice(0, Math.max(0, 3 - attachments.length));
+    for (const file of files) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result;
+        if (typeof dataUrl !== 'string') return;
+        setAttachments((items) =>
+          [
+            ...items,
+            {
+              name: file.name || `粘贴截图-${Date.now()}.png`,
+              mimeType: file.type,
+              dataUrl,
+            },
+          ].slice(0, 3),
+        );
+      };
+      reader.readAsDataURL(file);
+    }
+  };
   useEffect(() => {
     let active = true;
     void fetch(`/api/course-space/${course.id}/agent?sessionId=${encodeURIComponent(sessionId)}`, {
@@ -57,11 +90,40 @@ export function TeacherWorkspaceAgent({
       const response = await fetch(`/api/course-space/${course.id}/agent`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sessionId, message: content, history: messages }),
+        body: JSON.stringify({ sessionId, message: content, history: messages, attachments }),
       });
       const data = await response.json();
       if (!response.ok || data.success === false) throw new Error(data.error || '智能体响应失败');
-      setMessages([...next, { role: 'assistant', content: data.text, plan: data.plan }]);
+      let responseText = data.text;
+      let responsePlan = data.plan as TeacherOperationPlan | undefined;
+      if (
+        responsePlan?.action &&
+        responsePlan.status === 'planned' &&
+        !responsePlan.requiresConfirmation
+      ) {
+        const operationResponse = await fetch(`/api/course-space/${course.id}/agent/operations`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ plan: responsePlan }),
+        });
+        const operation = await operationResponse.json();
+        if (!operationResponse.ok || operation.success === false)
+          throw new Error(operation.error || '启动标准生成工作流失败');
+        responsePlan = operation.plan;
+        responseText =
+          operation.plan.result ||
+          (operation.dispatch === 'artifact-workflow'
+            ? '已根据教师指令启动标准生成工作流。生成结果将进入审核与可视化页面。'
+            : '已根据教师指令完成课程操作。');
+        if (
+          operation.dispatch === 'artifact-workflow' &&
+          operation.plan.action?.type === 'generate-artifact'
+        )
+          onGenerate(operation.plan.action.artifactType, operation.plan.action.scope);
+        else await onOperationComplete?.();
+      }
+      setMessages([...next, { role: 'assistant', content: responseText, plan: responsePlan }]);
+      setAttachments([]);
       setMode(
         data.mode === 'course-operator'
           ? '课程操作智能体'
@@ -226,10 +288,61 @@ export function TeacherWorkspaceAgent({
             </button>
           ))}
         </div>
+        {attachments.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {attachments.map((attachment, index) => (
+              <div
+                key={`${attachment.name}-${index}`}
+                className="relative overflow-hidden rounded-xl border border-[#B00055]/15 bg-white p-1 shadow-sm"
+              >
+                <img
+                  src={attachment.dataUrl}
+                  alt={attachment.name}
+                  className="h-16 w-24 rounded-lg object-cover"
+                />
+                <button
+                  type="button"
+                  aria-label={`移除截图 ${attachment.name}`}
+                  onClick={() =>
+                    setAttachments((items) => items.filter((_, itemIndex) => itemIndex !== index))
+                  }
+                  className="absolute right-1 top-1 rounded-full bg-slate-900/70 p-1 text-white"
+                >
+                  <X className="size-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="flex items-end gap-2 rounded-2xl border bg-slate-50/80 p-2 focus-within:border-[#B00055]/30 focus-within:ring-2 focus-within:ring-[#B00055]/10">
+          <label
+            className="grid size-10 shrink-0 cursor-pointer place-items-center rounded-xl text-slate-500 hover:bg-white hover:text-[#B00055]"
+            title="上传截图"
+          >
+            <ImagePlus className="size-4" />
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              multiple
+              className="sr-only"
+              onChange={(event) => {
+                addImageFiles(Array.from(event.target.files ?? []));
+                event.target.value = '';
+              }}
+            />
+          </label>
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onPaste={(event) => {
+              const images = Array.from(event.clipboardData.items)
+                .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+                .map((item) => item.getAsFile())
+                .filter((file): file is File => Boolean(file));
+              if (!images.length) return;
+              event.preventDefault();
+              addImageFiles(images);
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -249,7 +362,7 @@ export function TeacherWorkspaceAgent({
           </Button>
         </div>
         <p className="mt-2 text-[11px] text-muted-foreground">
-          Enter 发送 · Shift + Enter 换行 · 回答保留材料页码引用
+          可上传或 Ctrl+V 粘贴截图 · 最多 3 张 PNG/JPEG/WebP（单张 5MB） · Enter 发送
         </p>
       </div>
     </div>

@@ -2,6 +2,10 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import type { NextRequest } from 'next/server';
 import type { Scene, Stage } from '@/lib/types/stage';
+import {
+  readClassroomFromDatabase,
+  upsertClassroomDatabaseRecord,
+} from '@/lib/server/course-space-database';
 
 export const CLASSROOMS_DIR = path.join(process.cwd(), 'data', 'classrooms');
 export const CLASSROOM_JOBS_DIR = path.join(process.cwd(), 'data', 'classroom-jobs');
@@ -57,6 +61,8 @@ export function resolveClassroomFilePath(id: string): string {
 }
 
 export async function readClassroom(id: string): Promise<PersistedClassroomData | null> {
+  const databaseClassroom = await readClassroomFromDatabase(id);
+  if (databaseClassroom) return databaseClassroom;
   const filePath = resolveClassroomFilePath(id);
   try {
     const content = await fs.readFile(filePath, 'utf-8');
@@ -87,6 +93,7 @@ export async function persistClassroom(
   const filePath = resolveClassroomFilePath(data.id);
   await ensureClassroomsDir();
   await writeJsonFileAtomic(filePath, classroomData);
+  await upsertClassroomDatabaseRecord(classroomData);
 
   return {
     ...classroomData,

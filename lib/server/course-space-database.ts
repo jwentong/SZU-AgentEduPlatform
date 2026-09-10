@@ -9,6 +9,7 @@ import type {
   CourseSpace,
   PublishedKnowledgePackage,
 } from '@/lib/course-space/types';
+import type { PersistedClassroomData } from '@/lib/server/classroom-storage';
 
 type CourseDatabaseEntity =
   | CourseSpace
@@ -76,6 +77,34 @@ const SCHEMA_STATEMENTS = [
   )`,
   `CREATE INDEX IF NOT EXISTS mentra_course_artifacts_course_status_idx
     ON mentra_course_artifacts (course_id, status, updated_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS mentra_course_lesson_files (
+    id TEXT PRIMARY KEY, course_id TEXT NOT NULL, module_id TEXT NOT NULL, lesson_id TEXT NOT NULL,
+    file_type TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL, content TEXT NOT NULL,
+    payload JSONB NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS mentra_course_lesson_files_lesson_idx
+    ON mentra_course_lesson_files (course_id, module_id, lesson_id, file_type)`,
+  `CREATE TABLE IF NOT EXISTS mentra_classrooms (
+    id TEXT PRIMARY KEY, course_id TEXT, artifact_id TEXT,
+    stage JSONB NOT NULL, scenes JSONB NOT NULL, payload JSONB NOT NULL,
+    created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS mentra_classrooms_course_idx
+    ON mentra_classrooms (course_id, updated_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS mentra_artifact_files (
+    storage_key TEXT PRIMARY KEY, artifact_id TEXT NOT NULL, file_name TEXT NOT NULL,
+    mime_type TEXT NOT NULL, size_bytes BIGINT NOT NULL, sha256 TEXT NOT NULL,
+    bytes BYTEA NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS mentra_artifact_files_artifact_idx
+    ON mentra_artifact_files (artifact_id, updated_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS mentra_course_material_files (
+    storage_key TEXT PRIMARY KEY, material_id TEXT NOT NULL, course_id TEXT NOT NULL,
+    file_name TEXT NOT NULL, mime_type TEXT NOT NULL, size_bytes BIGINT NOT NULL,
+    sha256 TEXT NOT NULL, bytes BYTEA NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS mentra_course_material_files_course_idx
+    ON mentra_course_material_files (course_id, material_id)`,
   `CREATE TABLE IF NOT EXISTS mentra_knowledge_packages (
     id TEXT PRIMARY KEY, course_id TEXT NOT NULL, teacher_id TEXT NOT NULL,
     version INTEGER NOT NULL, status TEXT NOT NULL, payload JSONB NOT NULL,
@@ -169,13 +198,36 @@ async function withDatabase<T>(fn: (client: PoolClient) => Promise<T>): Promise<
 }
 
 export async function upsertCourseDatabaseRecord(course: CourseSpace) {
-  return withDatabase(async (client) => client.query(
-    `INSERT INTO mentra_courses (id, teacher_id, status, title, payload, created_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7)
-     ON CONFLICT (id) DO UPDATE SET teacher_id=EXCLUDED.teacher_id, status=EXCLUDED.status,
-       title=EXCLUDED.title, payload=EXCLUDED.payload, updated_at=EXCLUDED.updated_at`,
-    [course.id, course.teacherId, course.status, course.title, JSON.stringify(course), course.createdAt, course.updatedAt],
-  ));
+  return withDatabase(async (client) => {
+    await client.query('BEGIN');
+    try {
+      await client.query(
+        `INSERT INTO mentra_courses (id, teacher_id, status, title, payload, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7)
+         ON CONFLICT (id) DO UPDATE SET teacher_id=EXCLUDED.teacher_id, status=EXCLUDED.status,
+           title=EXCLUDED.title, payload=EXCLUDED.payload, updated_at=EXCLUDED.updated_at`,
+        [course.id, course.teacherId, course.status, course.title, JSON.stringify(course), course.createdAt, course.updatedAt],
+      );
+      await client.query('DELETE FROM mentra_course_lesson_files WHERE course_id=$1', [course.id]);
+      for (const courseModule of course.modules) {
+        for (const lesson of courseModule.lessons) {
+          for (const file of lesson.files ?? []) {
+            await client.query(
+              `INSERT INTO mentra_course_lesson_files
+               (id,course_id,module_id,lesson_id,file_type,title,status,content,payload,created_at,updated_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11)`,
+              [file.id, course.id, courseModule.id, lesson.id, file.type, file.title, file.status,
+                file.content, JSON.stringify(file), file.createdAt, file.updatedAt],
+            );
+          }
+        }
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    }
+  });
 }
 
 export async function upsertMaterialExtractionDatabaseRecord(extraction: CourseMaterialExtraction) {
@@ -186,6 +238,23 @@ export async function upsertMaterialExtractionDatabaseRecord(extraction: CourseM
        source_sha256=EXCLUDED.source_sha256, payload=EXCLUDED.payload, updated_at=EXCLUDED.updated_at`,
     [extraction.materialId, extraction.courseId, extraction.sourceSha256, JSON.stringify(extraction), extraction.createdAt, Date.now()],
   ));
+}
+
+export async function readCourseFromDatabase(courseId: string) {
+  return withDatabase(async (client) => {
+    const result = await client.query('SELECT payload FROM mentra_courses WHERE id=$1 LIMIT 1', [courseId]);
+    return result.rows[0]?.payload as CourseSpace | undefined;
+  });
+}
+
+export async function listCoursesFromDatabase(teacherId: string) {
+  return withDatabase(async (client) => {
+    const result = await client.query(
+      'SELECT payload FROM mentra_courses WHERE teacher_id=$1 ORDER BY updated_at DESC',
+      [teacherId],
+    );
+    return result.rows.map((row) => row.payload as CourseSpace);
+  });
 }
 
 export async function upsertCourseJobDatabaseRecord(job: CourseArtifactJob) {
@@ -199,21 +268,126 @@ export async function upsertCourseJobDatabaseRecord(job: CourseArtifactJob) {
 }
 
 export async function upsertCourseArtifactDatabaseRecord(artifact: CourseArtifactRecord) {
+  return withDatabase(async (client) => {
+    await client.query('BEGIN');
+    try {
+      await client.query(
+        `INSERT INTO mentra_course_artifacts (id, job_id, course_id, teacher_id, artifact_type, status, payload, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9)
+         ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, payload=EXCLUDED.payload,
+           artifact_type=EXCLUDED.artifact_type, updated_at=EXCLUDED.updated_at`,
+        [artifact.id, artifact.jobId, artifact.courseId, artifact.teacherId, artifact.type, artifact.status,
+          JSON.stringify(artifact), artifact.createdAt, artifact.updatedAt],
+      );
+      if (artifact.classroomId) {
+        await client.query(
+          'UPDATE mentra_classrooms SET course_id=$2,artifact_id=$3,updated_at=$4 WHERE id=$1',
+          [artifact.classroomId, artifact.courseId, artifact.id, artifact.updatedAt],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    }
+  });
+}
+
+export async function upsertClassroomDatabaseRecord(
+  classroom: PersistedClassroomData,
+  links: { courseId?: string; artifactId?: string } = {},
+) {
+  const createdAt = Date.parse(classroom.createdAt) || Date.now();
   return withDatabase(async (client) => client.query(
-    `INSERT INTO mentra_course_artifacts (id, job_id, course_id, teacher_id, artifact_type, status, payload, created_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9)
-     ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, payload=EXCLUDED.payload,
-       artifact_type=EXCLUDED.artifact_type, updated_at=EXCLUDED.updated_at`,
-    [artifact.id, artifact.jobId, artifact.courseId, artifact.teacherId, artifact.type, artifact.status,
-      JSON.stringify(artifact), artifact.createdAt, artifact.updatedAt],
+    `INSERT INTO mentra_classrooms
+     (id,course_id,artifact_id,stage,scenes,payload,created_at,updated_at)
+     VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7,$8)
+     ON CONFLICT (id) DO UPDATE SET
+       course_id=COALESCE(EXCLUDED.course_id,mentra_classrooms.course_id),
+       artifact_id=COALESCE(EXCLUDED.artifact_id,mentra_classrooms.artifact_id),
+       stage=EXCLUDED.stage,scenes=EXCLUDED.scenes,payload=EXCLUDED.payload,updated_at=EXCLUDED.updated_at`,
+    [classroom.id, links.courseId ?? null, links.artifactId ?? null,
+      JSON.stringify(classroom.stage), JSON.stringify(classroom.scenes), JSON.stringify(classroom), createdAt, Date.now()],
   ));
 }
 
-export async function deleteCourseArtifactDatabaseRecord(artifactId: string) {
+export async function readClassroomFromDatabase(id: string) {
+  return withDatabase(async (client) => {
+    const result = await client.query('SELECT payload FROM mentra_classrooms WHERE id=$1 LIMIT 1', [id]);
+    return result.rows[0]?.payload as PersistedClassroomData | undefined;
+  });
+}
+
+export async function upsertArtifactFileDatabaseRecord(input: {
+  storageKey: string; artifactId: string; fileName: string; mimeType: string; bytes: Buffer; sha256: string;
+}) {
+  const now = Date.now();
   return withDatabase(async (client) => client.query(
-    'DELETE FROM mentra_course_artifacts WHERE id=$1',
-    [artifactId],
+    `INSERT INTO mentra_artifact_files
+     (storage_key,artifact_id,file_name,mime_type,size_bytes,sha256,bytes,created_at,updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
+     ON CONFLICT (storage_key) DO UPDATE SET file_name=EXCLUDED.file_name,mime_type=EXCLUDED.mime_type,
+       size_bytes=EXCLUDED.size_bytes,sha256=EXCLUDED.sha256,bytes=EXCLUDED.bytes,updated_at=EXCLUDED.updated_at`,
+    [input.storageKey, input.artifactId, input.fileName, input.mimeType, input.bytes.length,
+      input.sha256, input.bytes, now],
   ));
+}
+
+export async function readArtifactFileFromDatabase(storageKey: string) {
+  return withDatabase(async (client) => {
+    const result = await client.query(
+      'SELECT file_name,mime_type,bytes FROM mentra_artifact_files WHERE storage_key=$1 LIMIT 1',
+      [storageKey],
+    );
+    const row = result.rows[0];
+    return row ? { fileName: row.file_name as string, mimeType: row.mime_type as string, bytes: row.bytes as Buffer } : undefined;
+  });
+}
+
+export async function upsertCourseMaterialFileDatabaseRecord(input: {
+  storageKey: string;
+  materialId: string;
+  courseId: string;
+  fileName: string;
+  mimeType: string;
+  bytes: Buffer;
+  sha256: string;
+}) {
+  const now = Date.now();
+  return withDatabase(async (client) => client.query(
+    `INSERT INTO mentra_course_material_files
+     (storage_key,material_id,course_id,file_name,mime_type,size_bytes,sha256,bytes,created_at,updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)
+     ON CONFLICT (storage_key) DO UPDATE SET file_name=EXCLUDED.file_name,mime_type=EXCLUDED.mime_type,
+       size_bytes=EXCLUDED.size_bytes,sha256=EXCLUDED.sha256,bytes=EXCLUDED.bytes,updated_at=EXCLUDED.updated_at`,
+    [input.storageKey, input.materialId, input.courseId, input.fileName, input.mimeType,
+      input.bytes.length, input.sha256, input.bytes, now],
+  ));
+}
+
+export async function readCourseMaterialFileFromDatabase(storageKey: string) {
+  return withDatabase(async (client) => {
+    const result = await client.query(
+      'SELECT bytes FROM mentra_course_material_files WHERE storage_key=$1 LIMIT 1',
+      [storageKey],
+    );
+    return result.rows[0]?.bytes as Buffer | undefined;
+  });
+}
+
+export async function deleteCourseArtifactDatabaseRecord(artifactId: string) {
+  return withDatabase(async (client) => {
+    await client.query('BEGIN');
+    try {
+      await client.query('DELETE FROM mentra_artifact_files WHERE artifact_id=$1', [artifactId]);
+      await client.query('UPDATE mentra_classrooms SET artifact_id=NULL WHERE artifact_id=$1', [artifactId]);
+      await client.query('DELETE FROM mentra_course_artifacts WHERE id=$1', [artifactId]);
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    }
+  });
 }
 
 export async function upsertKnowledgePackageDatabaseRecord(pkg: PublishedKnowledgePackage) {
@@ -236,6 +410,16 @@ export async function listCourseArtifactsFromDatabase(courseId: string, statuses
       ? await client.query('SELECT payload FROM mentra_course_artifacts WHERE course_id=$1 AND status=ANY($2::text[]) ORDER BY updated_at DESC', [courseId, statuses])
       : await client.query('SELECT payload FROM mentra_course_artifacts WHERE course_id=$1 ORDER BY updated_at DESC', [courseId]);
     return payloads<CourseArtifactRecord>(result.rows);
+  });
+}
+
+export async function readCourseArtifactFromDatabase(artifactId: string) {
+  return withDatabase(async (client) => {
+    const result = await client.query(
+      'SELECT payload FROM mentra_course_artifacts WHERE id=$1 LIMIT 1',
+      [artifactId],
+    );
+    return result.rows[0]?.payload as CourseArtifactRecord | undefined;
   });
 }
 
