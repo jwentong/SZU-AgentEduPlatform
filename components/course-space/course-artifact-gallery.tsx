@@ -8,7 +8,7 @@ import type { CourseArtifactRecord } from '@/lib/course-space';
 import { SlideThumbnail } from '@/components/slide-renderer/SlideThumbnail';
 import { getFirstSlideByStages, revokeThumbnailSlideMediaUrls } from '@/lib/utils/stage-storage';
 
-export function CourseArtifactGallery({ courseId, artifacts }: { courseId: string; artifacts: CourseArtifactRecord[] }) {
+export function CourseArtifactGallery({ courseId, artifacts, embedded = false }: { courseId: string; artifacts: CourseArtifactRecord[]; embedded?: boolean }) {
   const router = useRouter();
   const [covers, setCovers] = useState<Record<string, Slide>>({});
   const coversRef = useRef<Record<string, Slide>>({});
@@ -36,7 +36,7 @@ export function CourseArtifactGallery({ courseId, artifacts }: { courseId: strin
     router.push(artifact.classroomUrl || `/course-space/${courseId}/review/${artifact.id}`);
   };
 
-  return <section className="rounded-[24px] border border-white/80 bg-white/80 p-5 shadow-sm backdrop-blur-xl">
+  return <section className={embedded ? 'p-2' : 'rounded-[24px] border border-white/80 bg-white/80 p-5 shadow-sm backdrop-blur-xl'}>
     <div className="mb-4 flex items-end justify-between gap-4"><div><h3 className="text-lg font-semibold">历史教学产物</h3><p className="mt-1 text-xs text-muted-foreground">大纲、计划、课件、讲稿和习题集中保存在当前课程。</p></div><button className="text-xs font-medium text-[#B00055]" onClick={() => router.push(`/course-space/${courseId}/artifacts`)}>查看全部产物 →</button></div>
     {visibleArtifacts.length ? <div className="grid grid-cols-1 gap-x-4 gap-y-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{visibleArtifacts.map((artifact) => {
       const cover = artifact.classroomId ? covers[artifact.classroomId] : undefined;

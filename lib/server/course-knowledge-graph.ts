@@ -5,11 +5,7 @@ import type {
   CourseKnowledgeNode,
 } from '@/lib/course-space/types';
 import { readMaterialExtraction, readServerCourse, updateServerCourse } from '@/lib/server/course-space-storage';
-import {
-  publishCourseKnowledgeGraphInDatabase,
-  readCourseKnowledgeGraphFromDatabase,
-  saveCourseKnowledgeGraphToDatabase,
-} from '@/lib/server/course-space-database';
+import { publishCourseKnowledgeGraphVersion, readCourseKnowledgeGraph, saveCourseKnowledgeGraph } from '@/lib/server/course-knowledge-store';
 
 /**
  * Creates the traceable graph skeleton without inventing concepts. A later
@@ -19,7 +15,7 @@ export async function bootstrapCourseKnowledgeGraph(courseId: string, teacherId:
   const course = await readServerCourse(courseId);
   if (!course) throw new Error('课程不存在');
   if (course.teacherId !== teacherId) throw new Error('无权修改该课程');
-  const latest = await readCourseKnowledgeGraphFromDatabase(courseId);
+  const latest = await readCourseKnowledgeGraph(courseId);
   const version = (latest?.version ?? 0) + 1;
   const now = Date.now();
   const nodes: CourseKnowledgeNode[] = [];
@@ -65,12 +61,12 @@ export async function bootstrapCourseKnowledgeGraph(courseId: string, teacherId:
     summary:'由课程结构和已解析材料建立的可追溯图谱骨架，等待知识点抽取与教师审核。',
     nodes, edges, sourceMaterialHashes:[...new Set(extractions.map((item) => item!.sourceSha256))],
     createdBy:teacherId, createdAt:now };
-  await saveCourseKnowledgeGraphToDatabase(graph);
+  await saveCourseKnowledgeGraph(graph);
   return graph;
 }
 
 export async function publishCourseKnowledgeGraph(courseId: string, version: number) {
-  const graph = await readCourseKnowledgeGraphFromDatabase(courseId, { version });
+  const graph = await readCourseKnowledgeGraph(courseId, { version });
   if (!graph) return null;
   if (!graph.nodes.some((node) => node.type === 'source-chunk' && node.evidence.length > 0)) {
     throw new Error('图谱缺少原始材料页码证据，不能发布');
@@ -79,8 +75,8 @@ export async function publishCourseKnowledgeGraph(courseId: string, version: num
   if (reviewNodes.length === 0 || reviewNodes.some((node) => node.status !== 'approved')) {
     throw new Error('知识点和课程目标尚未完成教师审核，不能发布');
   }
-  const published = await publishCourseKnowledgeGraphInDatabase(courseId, version);
+  const published = await publishCourseKnowledgeGraphVersion(courseId, version);
   if (!published) return null;
   await updateServerCourse(courseId, (course) => ({ ...course, activeKnowledgeGraphVersion:version }));
-  return readCourseKnowledgeGraphFromDatabase(courseId, { version });
+  return readCourseKnowledgeGraph(courseId, { version });
 }

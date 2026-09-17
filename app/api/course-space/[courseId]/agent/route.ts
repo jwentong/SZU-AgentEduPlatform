@@ -6,6 +6,7 @@ import {
 } from '@/lib/course-space/teacher-agent-intent';
 import { readServerCourse } from '@/lib/server/course-space-storage';
 import { executeReadOnlyTeacherPlan } from '@/lib/server/teacher-course-operations';
+import type { CourseArtifactJob } from '@/lib/course-space/types';
 import {
   getCourseSpaceStorageAdapter,
   type TeacherAgentTurnLease,
@@ -21,6 +22,28 @@ export async function GET(
   context: { params: Promise<{ courseId: string }> },
 ) {
   const { courseId } = await context.params;
+  if (request.nextUrl.searchParams.get('list') === '1') {
+    const course = await readServerCourse(courseId);
+    if (!course)
+      return NextResponse.json({ success: false, error: '课程不存在' }, { status: 404 });
+    const sessions = await storage.listTeacherSessions(courseId, course.teacherId);
+    const summaries = await Promise.all(
+      sessions.slice(0, 40).map(async (session) => {
+        const events = await storage.readTeacherEvents(session.id);
+        const firstMessage = events.find((event) => event.type === 'user_message');
+        const data = firstMessage?.data && typeof firstMessage.data === 'object'
+          ? firstMessage.data as Record<string, unknown>
+          : {};
+        return {
+          id: session.id,
+          title: typeof data.text === 'string' ? data.text.slice(0, 32) : '新备课会话',
+          updatedAt: session.updatedAt,
+          status: session.status,
+        };
+      }),
+    );
+    return NextResponse.json({ success: true, sessions: summaries });
+  }
   const sessionId = request.nextUrl.searchParams.get('sessionId')?.trim();
   if (!sessionId)
     return NextResponse.json({ success: false, error: '缺少 sessionId' }, { status: 400 });
@@ -67,11 +90,19 @@ export async function POST(
       message?: string;
       history?: Array<{ role: 'user' | 'assistant'; content: string }>;
       attachments?: Array<{ name: string; mimeType: string; dataUrl: string }>;
+      scope?: CourseArtifactJob['scope'];
     };
     if (!body.message?.trim())
       return NextResponse.json({ success: false, error: '请输入问题' }, { status: 400 });
     const course = await readServerCourse(courseId);
     if (!course) return NextResponse.json({ success: false, error: '课程不存在' }, { status: 404 });
+    const requestedScope = body.scope;
+    if (requestedScope) {
+      const scopeExists = requestedScope.type === 'course'
+        || (requestedScope.type === 'module' && course.modules.some((item) => item.id === requestedScope.moduleId))
+        || (requestedScope.type === 'lesson' && course.modules.some((item) => item.lessons.some((lesson) => lesson.id === requestedScope.lessonId)));
+      if (!scopeExists) return NextResponse.json({ success: false, error: '当前工作文件夹已不存在，请重新选择' }, { status: 409 });
+    }
     const sessionId = body.sessionId || `teacher-${courseId}-default`;
     lease = await storage.beginTeacherTurn({
       sessionId,
@@ -79,7 +110,7 @@ export async function POST(
       courseId,
       message: body.message.trim(),
     });
-    let plan = planTeacherWorkspaceOperation(body.message, course);
+    let plan = planTeacherWorkspaceOperation(body.message, course, body.scope);
     if (plan) {
       if (!plan.requiresConfirmation) plan = await executeReadOnlyTeacherPlan(courseId, plan);
       const text = plan.requiresConfirmation
@@ -106,6 +137,7 @@ export async function POST(
       message: body.message.trim(),
       history: body.history,
       attachments,
+      scope: body.scope,
     });
     await storage.completeTeacherTurn(lease, result);
     return NextResponse.json({ success: true, ...result });

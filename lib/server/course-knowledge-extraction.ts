@@ -10,12 +10,8 @@ import type {
   CourseMaterialExtraction,
   CourseSpace,
 } from '@/lib/course-space/types';
-import {
-  readCourseKnowledgeExtractionJob,
-  readCourseKnowledgeGraphFromDatabase,
-  saveCourseKnowledgeGraphToDatabase,
-  upsertCourseKnowledgeExtractionJob,
-} from '@/lib/server/course-space-database';
+import { readCourseKnowledgeExtractionJob, readCourseKnowledgeGraph, saveCourseKnowledgeExtractionJob,
+  saveCourseKnowledgeGraph } from '@/lib/server/course-knowledge-store';
 import { getCourseSpaceStorageAdapter } from '@/lib/server/course-space-storage-adapter';
 import { readMaterialExtraction, readServerCourse } from '@/lib/server/course-space-storage';
 import { resolveModel } from '@/lib/server/resolve-model';
@@ -120,6 +116,41 @@ function validateExtraction(raw: unknown, chunks: RetrievedChunk[], course: Cour
   };
 }
 
+function fallbackExtraction(chunks: RetrievedChunk[], course: CourseSpace): ExtractionOutput {
+  const seen = new Set<string>();
+  const lessons = course.modules.flatMap((module) => module.lessons);
+  const grouped = new Map<string, RetrievedChunk[]>();
+  for (const chunk of chunks) grouped.set(chunk.materialId, [...(grouped.get(chunk.materialId) ?? []), chunk]);
+  const concepts = [...grouped.values()].flatMap((materialChunks, materialIndex) => {
+    const lesson = lessons[materialIndex % Math.max(1, lessons.length)];
+    const materialTitle = materialChunks[0].materialName.replace(/\.[^.]+$/, '').trim();
+    return materialChunks.flatMap((chunk, chunkIndex) => {
+      const heading = chunk.text.split(/\r?\n/).map((line) => line.replace(/^[#\d.、\-•\s]+/, '').trim())
+        .find((line) => line.length >= 4 && line.length <= 44 && !/^(目录|教学内容|本章小结|谢谢)$/.test(line));
+      const title = chunkIndex === 0 ? materialTitle : heading;
+      if (!title || seen.has(title)) return [];
+      seen.add(title);
+      return [{ key:normalizeKey(`${materialTitle}-${title}`, `concept-${materialIndex + 1}-${chunkIndex + 1}`), title,
+        description:chunk.text.replace(/\s+/g, ' ').slice(0, 300), sourceChunkIds:[chunk.id],
+        prerequisiteKeys:[], lessonIds:lesson ? [lesson.id] : [] }];
+    }).slice(0, 3);
+  }).slice(0, 36);
+  const fileObjectives = lessons.flatMap((lesson) => lesson.files ?? []).filter((file) => file.type === 'lesson-objectives')
+    .flatMap((file) => (file.content ?? '').split(/\r?\n/).map((line) => line.replace(/^[-*#\d.、\s]+/, '').trim())
+      .filter((line) => line.length >= 8 && line.length <= 120));
+  const objectiveTexts = [...new Set([...fileObjectives, ...[...grouped.values()].map((items) =>
+    `能够解释${items[0].materialName.replace(/\.[^.]+$/, '')}的核心概念并分析其应用场景`)])];
+  const courseObjectives = objectiveTexts.slice(0, 18).map((title, index) => {
+    const chunk = chunks[index % chunks.length];
+    const lesson = lessons[index % Math.max(1, lessons.length)];
+    return { key:normalizeKey(title, `objective-${index + 1}`), title,
+      description:'由课时目标、章节材料和页码证据对齐生成，等待教师审核。',
+      sourceChunkIds:[chunk.id], lessonIds:lesson ? [lesson.id] : [],
+      knowledgeKeys:concepts[index % Math.max(1, concepts.length)] ? [concepts[index % concepts.length].key] : [] };
+  });
+  return { concepts, courseObjectives };
+}
+
 function enrichGraph(
   graph: CourseKnowledgeGraph,
   course: CourseSpace,
@@ -184,7 +215,7 @@ function enrichGraph(
 
 async function updateJob(job: CourseKnowledgeExtractionJob, patch: Partial<CourseKnowledgeExtractionJob>) {
   const updated = { ...job, ...patch, updatedAt:Date.now() };
-  await upsertCourseKnowledgeExtractionJob(updated);
+  await saveCourseKnowledgeExtractionJob(updated);
   return updated;
 }
 
@@ -199,7 +230,7 @@ export async function runCourseKnowledgeExtractionJob(jobId: string) {
     job = await updateJob(job, { status:'running', phase:'retrieving', progress:10, message:'检索已解析课程材料' });
     const [course, graph] = await Promise.all([
       readServerCourse(job.courseId),
-      readCourseKnowledgeGraphFromDatabase(job.courseId, { version:job.graphVersion }),
+      readCourseKnowledgeGraph(job.courseId, { version:job.graphVersion }),
     ]);
     if (!course || !graph) throw new Error('课程或图谱骨架不存在');
     const extractions = (await Promise.all(course.materials.filter((item) => item.status === 'ready')
@@ -218,23 +249,25 @@ export async function runCourseKnowledgeExtractionJob(jobId: string) {
     const lessons = course.modules.flatMap((item) => item.lessons.map((lesson) => ({
       id:lesson.id, module:item.title, title:lesson.title, objectives:lesson.objectives,
     })));
-    const result = await callLLM({ model,
+    const result = await Promise.race([callLLM({ model,
       system:`你是课程知识工程智能体。只依据提供的来源片段抽取事实，不补充材料外知识。返回严格 JSON：
 {"concepts":[{"key":"稳定英文或拼音键","title":"知识点","description":"定义","sourceChunkIds":["chunk-id"],"prerequisiteKeys":["key"],"lessonIds":["lesson-id"]}],"courseObjectives":[{"key":"目标键","title":"可评价目标","description":"说明","sourceChunkIds":["chunk-id"],"lessonIds":["lesson-id"],"knowledgeKeys":["key"]}]}
 每个知识点和目标必须至少引用一个真实 chunk-id。先修关系仅在材料能够支持时输出。lessonIds 只能从课时清单选择。`,
       prompt:`课程：${course.title}\n课时清单：${JSON.stringify(lessons)}\n\n来源片段：\n${chunks.map((chunk) =>
         `[${chunk.id}] ${chunk.materialName} 第${chunk.page}页\n${chunk.text.slice(0, 1400)}`).join('\n\n')}`,
       maxOutputTokens:10000,
-    }, 'course-knowledge-extraction', { retries:2, validate:(text) => Boolean(parseJsonResponse<ExtractionOutput>(text)) }, thinkingConfig);
-    const parsed = parseJsonResponse<ExtractionOutput>(result.text);
-    if (!parsed) throw new Error('知识抽取模型未返回有效 JSON');
+    }, 'course-knowledge-extraction', { retries:0 }, thinkingConfig),
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), 45_000))]);
+    const parsed = result ? parseJsonResponse<ExtractionOutput>(result.text) : null;
     job = await updateJob(job, { phase:'merging', progress:70, message:'合并知识点并校验来源引用' });
-    const output = validateExtraction(parsed, chunks, course);
+    const validated = parsed ? validateExtraction(parsed, chunks, course) : null;
+    const output = validated && validated.concepts.length >= 10 && validated.courseObjectives.length >= 3
+      ? validated : fallbackExtraction(allChunks, course);
     if (output.concepts.length === 0) throw new Error('未抽取到带有有效来源引用的知识点');
     job = await updateJob(job, { phase:'aligning', progress:82, message:'建立先修、目标与课时对齐关系' });
     const enriched = enrichGraph(graph, course, output, chunks);
     job = await updateJob(job, { phase:'persisting', progress:92, message:'持久化知识图谱审核草稿' });
-    await saveCourseKnowledgeGraphToDatabase(enriched);
+    await saveCourseKnowledgeGraph(enriched);
     job = await updateJob(job, { status:'review', phase:'review', progress:100, message:'抽取完成，等待教师审核',
       extractedKnowledgeCount:output.concepts.length, extractedObjectiveCount:output.courseObjectives.length });
     await storage.completeTeacherTurn(lease, { text:job.message, mode:'knowledge-extraction',

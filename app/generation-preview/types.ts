@@ -55,7 +55,7 @@ export interface GenerationSessionState {
   /** Optional origin when generation was launched from the full-course teacher workspace. */
   courseSpaceContext?: {
     courseId: string;
-    materialId: string;
+    materialId?: string;
     scope: { type: 'course' } | { type: 'module'; moduleId: string } | { type: 'lesson'; lessonId: string };
   };
 }

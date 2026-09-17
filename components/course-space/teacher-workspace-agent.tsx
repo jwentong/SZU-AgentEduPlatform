@@ -1,13 +1,28 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { Bot, CheckCircle2, Circle, ImagePlus, LoaderCircle, Play, Send, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Bot,
+  CheckCircle2,
+  Circle,
+  FolderOpen,
+  ImagePlus,
+  LoaderCircle,
+  MessageSquare,
+  MessageSquarePlus,
+  Play,
+  Send,
+  ShieldCheck,
+  X,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { SpeechButton } from '@/components/audio/speech-button';
 import type { CourseArtifactJob, CourseArtifactType, CourseSpace } from '@/lib/course-space';
 import type { TeacherOperationPlan } from '@/lib/course-space/teacher-agent-intent';
 
 type Message = { role: 'user' | 'assistant'; content: string; plan?: TeacherOperationPlan };
-type ScreenshotAttachment = { name: string; mimeType: string; dataUrl: string };
+export type ScreenshotAttachment = { name: string; mimeType: string; dataUrl: string };
+type SessionSummary = { id: string; title: string; updatedAt: number; status: string };
 
 const actions: Array<{ type: CourseArtifactType; label: string }> = [
   { type: 'course-outline', label: '教学大纲' },
@@ -20,14 +35,25 @@ const actions: Array<{ type: CourseArtifactType; label: string }> = [
 
 export function TeacherWorkspaceAgent({
   course,
+  activeScope,
   onGenerate,
   onOperationComplete,
+  embedded = false,
+  externalPrompt,
 }: {
   course: CourseSpace;
+  activeScope: CourseArtifactJob['scope'];
   onGenerate: (type: CourseArtifactType, scope?: CourseArtifactJob['scope']) => void;
   onOperationComplete?: () => void | Promise<void>;
+  embedded?: boolean;
+  externalPrompt?: { id: number; text: string; attachments?: ScreenshotAttachment[] };
 }) {
-  const sessionId = useMemo(() => `teacher-${course.id}-default`, [course.id]);
+  const initialMessage = useMemo<Message>(() => ({
+    role: 'assistant',
+    content: `你好，我是“${course.title}”的课程操作智能体。课程材料、结构、知识图谱与中间产物已作为插件接入。我可以按你的要求启动教学大纲、教学计划、课件、讲稿、习题和评分量规工作，也可以创建、移动或删除课程文件。生成任务会直接进入标准生成—审核—可视化流程；结构变更与删除操作会先提交计划供你确认。`,
+  }), [course.title]);
+  const [sessionId, setSessionId] = useState(() => `teacher-${course.id}-default`);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
@@ -35,9 +61,33 @@ export function TeacherWorkspaceAgent({
     },
   ]);
   const [input, setInput] = useState('');
+  const voiceInputBaseRef = useRef<string | null>(null);
   const [attachments, setAttachments] = useState<ScreenshotAttachment[]>([]);
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState('DeepSeek Harness');
+  const loadSessions = useCallback(async () => {
+    const response = await fetch(`/api/course-space/${course.id}/agent?list=1`, { cache: 'no-store' });
+    const data = await response.json() as { sessions?: SessionSummary[] };
+    if (response.ok) setSessions(data.sessions ?? []);
+  }, [course.id]);
+  const workingLocation = useMemo(() => {
+    if (activeScope.type === 'course') return course.title;
+    if (activeScope.type === 'module') {
+      const courseModule = course.modules.find((item) => item.id === activeScope.moduleId);
+      return courseModule ? `${course.title} / ${courseModule.title}` : course.title;
+    }
+    for (const courseModule of course.modules) {
+      const lesson = courseModule.lessons.find((item) => item.id === activeScope.lessonId);
+      if (lesson) return `${course.title} / ${courseModule.title} / ${lesson.title}`;
+    }
+    return course.title;
+  }, [activeScope, course]);
+  const accessibleFolderCount = useMemo(
+    () =>
+      course.modules.length +
+      course.modules.reduce((count, courseModule) => count + courseModule.lessons.length, 0),
+    [course.modules],
+  );
   const addImageFiles = (incoming: File[]) => {
     const files = incoming
       .filter(
@@ -66,7 +116,12 @@ export function TeacherWorkspaceAgent({
     }
   };
   useEffect(() => {
+    setSessionId(`teacher-${course.id}-default`);
+    void loadSessions().catch(() => undefined);
+  }, [course.id, loadSessions]);
+  useEffect(() => {
     let active = true;
+    setMessages([initialMessage]);
     void fetch(`/api/course-space/${course.id}/agent?sessionId=${encodeURIComponent(sessionId)}`, {
       cache: 'no-store',
     })
@@ -78,7 +133,7 @@ export function TeacherWorkspaceAgent({
     return () => {
       active = false;
     };
-  }, [course.id, sessionId]);
+  }, [course.id, initialMessage, sessionId]);
   const send = async (preset?: string) => {
     const content = (preset ?? input).trim();
     if (!content || loading) return;
@@ -90,7 +145,13 @@ export function TeacherWorkspaceAgent({
       const response = await fetch(`/api/course-space/${course.id}/agent`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sessionId, message: content, history: messages, attachments }),
+        body: JSON.stringify({
+          sessionId,
+          message: content,
+          history: messages,
+          attachments: externalPrompt?.attachments ?? attachments,
+          scope: activeScope,
+        }),
       });
       const data = await response.json();
       if (!response.ok || data.success === false) throw new Error(data.error || '智能体响应失败');
@@ -123,6 +184,7 @@ export function TeacherWorkspaceAgent({
         else await onOperationComplete?.();
       }
       setMessages([...next, { role: 'assistant', content: responseText, plan: responsePlan }]);
+      void loadSessions().catch(() => undefined);
       setAttachments([]);
       setMode(
         data.mode === 'course-operator'
@@ -143,6 +205,12 @@ export function TeacherWorkspaceAgent({
       setLoading(false);
     }
   };
+  const lastExternalPromptId = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!externalPrompt || loading || lastExternalPromptId.current === externalPrompt.id) return;
+    lastExternalPromptId.current = externalPrompt.id;
+    void send(externalPrompt.text);
+  }, [externalPrompt, loading]); // External prompts are one-shot commands from the shared workbench composer.
   const executePlan = async (messageIndex: number, plan: TeacherOperationPlan) => {
     if (loading) return;
     setLoading(true);
@@ -184,9 +252,16 @@ export function TeacherWorkspaceAgent({
       setLoading(false);
     }
   };
+  const startNewSession = () => {
+    const nextSessionId = `teacher-${course.id}-${Date.now().toString(36)}`;
+    setSessionId(nextSessionId);
+    setMessages([initialMessage]);
+    setInput('');
+    setAttachments([]);
+  };
   return (
     <div className="flex h-full min-h-[600px] flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white/90 shadow-sm backdrop-blur-xl">
-      <div className="flex items-center justify-between border-b border-slate-100 bg-white/80 px-5 py-4">
+      {!embedded && <div className="flex items-center justify-between border-b border-slate-100 bg-white/80 px-5 py-4">
         <div className="flex items-center gap-3">
           <div className="rounded-xl bg-gradient-to-br from-[#B00055]/15 to-[#B00055]/5 p-2.5 text-[#B00055]">
             <Bot className="size-5" />
@@ -201,7 +276,43 @@ export function TeacherWorkspaceAgent({
         <span className="rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-1 text-[11px] text-emerald-700">
           {mode}
         </span>
+      </div>}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-slate-100 bg-[#fff8fb] px-5 py-3 text-xs">
+        <div className="flex min-w-0 items-center gap-2 text-slate-700">
+          <FolderOpen className="size-4 shrink-0 text-[#B00055]" />
+          <span className="shrink-0 font-medium">当前工作位置</span>
+          <span className="truncate text-[#8F0046]">{workingLocation}</span>
+        </div>
+        <div className="ml-auto flex items-center gap-1.5 text-slate-500">
+          <ShieldCheck className="size-4 text-emerald-600" />
+          可访问本课程全部 {accessibleFolderCount} 个文件夹
+        </div>
       </div>
+      <div className="flex min-h-0 flex-1">
+        <aside className="flex w-64 shrink-0 flex-col border-r border-slate-100 bg-slate-50/80">
+          <div className="border-b border-slate-100 p-3">
+            <Button type="button" variant="outline" className="w-full justify-start rounded-xl bg-white" onClick={startNewSession}>
+              <MessageSquarePlus className="mr-2 size-4 text-[#B00055]" />
+              新备课会话
+            </Button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto p-2">
+            <p className="px-2 pb-2 pt-1 text-[10px] font-medium uppercase tracking-[.14em] text-slate-400">历史会话</p>
+            <div className="space-y-1">
+              {sessions.map((session) => (
+                <button key={session.id} type="button" onClick={() => setSessionId(session.id)} className={`flex w-full items-start gap-2 rounded-xl px-3 py-2.5 text-left transition ${sessionId === session.id ? 'bg-[#B00055]/10 text-[#8F0046]' : 'text-slate-600 hover:bg-white hover:text-slate-900'}`}>
+                  <MessageSquare className="mt-0.5 size-3.5 shrink-0" />
+                  <span className="min-w-0">
+                    <span className="block truncate text-xs font-medium">{session.title || '新备课会话'}</span>
+                    <span className="mt-1 block text-[10px] text-slate-400">{new Date(session.updatedAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                  </span>
+                </button>
+              ))}
+              {!sessions.length && <p className="px-3 py-5 text-xs leading-5 text-slate-400">发送第一条消息后，会话将保存在这里。</p>}
+            </div>
+          </div>
+        </aside>
+        <div className="flex min-w-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto bg-[radial-gradient(circle_at_top_left,rgba(176,0,85,0.06),transparent_38%),#fbfcfe] p-5">
         {messages.map((message, index) => (
           <div
@@ -276,7 +387,7 @@ export function TeacherWorkspaceAgent({
           </div>
         )}
       </div>
-      <div className="border-t border-slate-100 bg-white/90 p-4">
+      {!embedded && <div className="border-t border-slate-100 bg-white/90 p-4">
         <div className="mb-3 flex flex-wrap gap-2">
           {actions.map((item) => (
             <button
@@ -352,6 +463,27 @@ export function TeacherWorkspaceAgent({
             className="min-h-16 flex-1 resize-none bg-transparent px-2 py-1 text-sm outline-none"
             placeholder="例如：把第一周内容移到第二周、删除空课时文件夹，或生成本周课件…"
           />
+          <SpeechButton
+            size="md"
+            disabled={loading}
+            continuous
+            onInterimTranscription={(text) =>
+              setInput((current) => {
+                if (voiceInputBaseRef.current === null) voiceInputBaseRef.current = current;
+                const base = voiceInputBaseRef.current;
+                return `${base}${base.trim() ? ' ' : ''}${text}`;
+              })
+            }
+            onTranscription={(text) =>
+              setInput((current) => {
+                const base = voiceInputBaseRef.current;
+                voiceInputBaseRef.current = null;
+                const stableBase = base ?? current;
+                return `${stableBase}${stableBase.trim() ? ' ' : ''}${text}`;
+              })
+            }
+            className="size-10 rounded-xl hover:bg-white hover:text-[#B00055]"
+          />
           <Button
             size="icon"
             className="size-10 shrink-0 rounded-xl"
@@ -362,8 +494,10 @@ export function TeacherWorkspaceAgent({
           </Button>
         </div>
         <p className="mt-2 text-[11px] text-muted-foreground">
-          可上传或 Ctrl+V 粘贴截图 · 最多 3 张 PNG/JPEG/WebP（单张 5MB） · Enter 发送
+          麦克风开启后会边听边显示文字，再次点击停止 · 可上传或 Ctrl+V 粘贴截图 · Enter 发送
         </p>
+      </div>}
+        </div>
       </div>
     </div>
   );

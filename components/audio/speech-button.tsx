@@ -11,6 +11,7 @@ import { toast } from 'sonner';
 
 interface SpeechButtonProps {
   onTranscription: (text: string) => void;
+  onInterimTranscription?: (text: string) => void;
   className?: string;
   disabled?: boolean;
   size?: 'sm' | 'md';
@@ -28,6 +29,7 @@ export function shouldCancelRecordingOnDisable(args: {
 
 export function SpeechButton({
   onTranscription,
+  onInterimTranscription,
   className,
   disabled,
   size = 'sm',
@@ -52,6 +54,7 @@ export function SpeechButton({
   const { isRecording, isProcessing, startRecording, stopRecording, cancelRecording } =
     useAudioRecorder({
       onTranscription: stableOnTranscription,
+      onInterimTranscription,
       onError: handleError,
       continuous,
     });

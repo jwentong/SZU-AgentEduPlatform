@@ -20,7 +20,7 @@ const lessonFileTitles = {
   'assessment-criteria': '评价指标',
 } as const;
 
-async function generateLessonFileContent(
+export async function generateLessonFileContent(
   course: NonNullable<Awaited<ReturnType<typeof readServerCourse>>>,
   lessonTitle: string,
   fileTypes: Array<keyof typeof lessonFileTitles>,
@@ -67,8 +67,8 @@ export async function executeReadOnlyTeacherPlan(
   if (!course) throw new Error('课程不存在');
   const artifacts = await listCourseArtifacts(courseId);
   if (plan.kind === 'inspect-exercises') {
-    const module = course.modules.find((item) => plan.title.includes(item.title));
-    if (!module)
+    const courseModule = course.modules.find((item) => plan.title.includes(item.title));
+    if (!courseModule)
       return {
         ...plan,
         status: 'blocked',
@@ -80,24 +80,24 @@ export async function executeReadOnlyTeacherPlan(
       const scope = item.scope;
       return (
         scope.type === 'course' ||
-        (scope.type === 'module' && scope.moduleId === module.id) ||
-        (scope.type === 'lesson' && module.lessons.some((lesson) => lesson.id === scope.lessonId))
+        (scope.type === 'module' && scope.moduleId === courseModule.id) ||
+        (scope.type === 'lesson' && courseModule.lessons.some((lesson) => lesson.id === scope.lessonId))
       );
     });
     const coveredLessons = new Set(
       exercises.flatMap((item) =>
         item.scope.type === 'lesson'
           ? [item.scope.lessonId]
-          : module.lessons.map((lesson) => lesson.id),
+          : courseModule.lessons.map((lesson) => lesson.id),
       ),
     );
-    const missing = module.lessons.filter((lesson) => !coveredLessons.has(lesson.id));
+    const missing = courseModule.lessons.filter((lesson) => !coveredLessons.has(lesson.id));
     const result =
       exercises.length === 0
-        ? `“${module.title}”包含 ${module.lessons.length} 个课时，目前没有关联的习题产物，建议按模块或逐课时生成练习。`
+        ? `“${courseModule.title}”包含 ${courseModule.lessons.length} 个课时，目前没有关联的习题产物，建议按模块或逐课时生成练习。`
         : missing.length
           ? `找到 ${exercises.length} 份习题产物；仍缺少：${missing.map((item) => item.title).join('、')}。`
-          : `找到 ${exercises.length} 份习题产物，${module.lessons.length} 个课时均已有练习覆盖。`;
+          : `找到 ${exercises.length} 份习题产物，${courseModule.lessons.length} 个课时均已有练习覆盖。`;
     return {
       ...plan,
       status: 'completed',

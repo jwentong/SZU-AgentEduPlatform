@@ -103,6 +103,25 @@ const ASR_ENV_MAP: Record<string, string> = {
   ASR_LEMONADE: 'lemonade-asr',
 };
 
+/**
+ * Qwen's general DashScope credential can also call Qwen ASR. Keep the ASR
+ * endpoint provider-specific, but avoid requiring operators to duplicate the
+ * same secret as ASR_QWEN_API_KEY just to enable voice input.
+ */
+function applyQwenASRFallback(
+  asr: Record<string, ServerProviderEntry>,
+): Record<string, ServerProviderEntry> {
+  if (asr['qwen-asr']) return asr;
+
+  const apiKey = process.env.QWEN_API_KEY?.trim() || process.env.TTS_QWEN_API_KEY?.trim();
+  if (!apiKey) return asr;
+
+  return {
+    ...asr,
+    'qwen-asr': { apiKey },
+  };
+}
+
 const PDF_ENV_MAP: Record<string, string> = {
   PDF_UNPDF: 'unpdf',
   PDF_MINERU: 'mineru',
@@ -451,9 +470,11 @@ function buildConfig(yamlData: YamlData): ServerConfig {
     tts: loadEnvSection(TTS_ENV_MAP, yamlData.tts, {
       keylessProviders: new Set(['voxcpm-tts', 'lemonade-tts']),
     }),
-    asr: loadEnvSection(ASR_ENV_MAP, yamlData.asr, {
-      keylessProviders: new Set(['funasr-asr', 'lemonade-asr']),
-    }),
+    asr: applyQwenASRFallback(
+      loadEnvSection(ASR_ENV_MAP, yamlData.asr, {
+        keylessProviders: new Set(['funasr-asr', 'lemonade-asr']),
+      }),
+    ),
     pdf: applyAliDocMindFallback(
       loadEnvSection(PDF_ENV_MAP, yamlData.pdf, {
         requiresBaseUrl: true,

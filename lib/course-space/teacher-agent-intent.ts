@@ -148,6 +148,7 @@ function findLessonByOrdinal(course: CourseSpace, value?: string) {
 export function planTeacherWorkspaceOperation(
   content: string,
   course: CourseSpace,
+  currentScope?: CourseArtifactJob['scope'],
 ): TeacherOperationPlan | undefined {
   const normalized = content.replace(/\s+/g, ' ').trim();
   const id = `plan-${Date.now().toString(36)}`;
@@ -157,7 +158,7 @@ export function planTeacherWorkspaceOperation(
     : undefined;
 
   const lessonFileRules: Array<{ type: CourseLessonFileType; label: string; pattern: RegExp }> = [
-    { type: 'lesson-objectives', label: '课时目标', pattern: /课时目标|学习目标/u },
+    { type: 'lesson-objectives', label: '课时目标', pattern: /课时目标|课程目标|学习目标/u },
     { type: 'knowledge-points', label: '知识点', pattern: /知识点/u },
     { type: 'teaching-activities', label: '教学活动', pattern: /教学活动/u },
     { type: 'courseware-pages', label: '课件页面', pattern: /课件页面/u },
@@ -171,7 +172,7 @@ export function planTeacherWorkspaceOperation(
   );
   if (
     requestedLessonFiles.length &&
-    /(?:创建|建立|添加|生成).{0,20}(?:文件|课时目标|知识点|教学活动)|(?:文件夹下|课时下).{0,20}(?:创建|建立|添加|生成)/u.test(
+    /(?:创建|建立|添加|生成).{0,20}(?:文件|课时目标|课程目标|学习目标|知识点|教学活动)|(?:文件夹下|课时下).{0,20}(?:创建|建立|添加|生成)/u.test(
       normalized,
     )
   ) {
@@ -182,9 +183,11 @@ export function planTeacherWorkspaceOperation(
     const populateContent =
       /生成|具体内容|根据课程材料|完善|填写|写入/u.test(normalized) &&
       !/(?:创建|建立|添加)(?:空白|空的?|结构化)?(?:文件|文件夹|目录)/u.test(normalized);
+    const scopedLessonId = !start && currentScope?.type === 'lesson' ? currentScope.lessonId : undefined;
     const targets = course.modules
       .flatMap((module) => module.lessons)
       .filter((lesson) => {
+        if (scopedLessonId) return lesson.id === scopedLessonId;
         const week = ordinal(lesson.title.match(/^第([一二三四五六七八九十\d]+)周$/u)?.[1]);
         return week && start && end && week >= start && week <= end;
       });
@@ -479,7 +482,7 @@ export function planTeacherWorkspaceOperation(
     ? { type: 'lesson', lessonId: requestedLesson.lesson.id }
     : targetModule
       ? { type: 'module', moduleId: targetModule.id }
-      : { type: 'course' };
+      : currentScope ?? { type: 'course' };
   action.instruction = normalized;
   const scopeTitle = requestedLesson?.lesson.title ?? targetModule?.title;
   return {

@@ -12,6 +12,7 @@ import {
   Plus,
   Presentation,
   Sparkles,
+  Trash2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type {
@@ -39,6 +40,10 @@ type BrowserFile = {
   material?: CourseMaterialRecord;
   scope: Scope;
 };
+type DragItem = { kind: 'material' | 'course-file' | 'artifact'; id: string };
+type FolderMenu =
+  | { kind: 'module'; id: string; title: string; x: number; y: number }
+  | { kind: 'lesson'; id: string; title: string; x: number; y: number };
 const artifactPriority = (artifact: CourseArtifactRecord) =>
   artifact.type === 'lesson-courseware'
     ? 3
@@ -53,24 +58,26 @@ function belongsToScope(artifact: CourseArtifactRecord, scope: Scope, course: Co
   if (scope.type === 'module')
     return artifact.scope.type === 'module' && artifact.scope.moduleId === scope.moduleId;
   if (artifact.scope.type === 'lesson') return artifact.scope.lessonId === scope.lessonId;
-  const module = course.modules.find((item) =>
+  const courseModule = course.modules.find((item) =>
     item.lessons.some((lesson) => lesson.id === scope.lessonId),
   );
-  return artifact.scope.type === 'module' && artifact.scope.moduleId === module?.id;
+  return artifact.scope.type === 'module' && artifact.scope.moduleId === courseModule?.id;
 }
 
 export function CourseWorkspaceExplorer({
   course,
   artifacts,
-  onGenerate,
+  onGenerate: _onGenerate,
   onCourseChange,
   onRefresh,
+  onScopeChange,
 }: {
   course: CourseSpace;
   artifacts: CourseArtifactRecord[];
   onGenerate: (type: CourseArtifactType, scope?: CourseArtifactJob['scope']) => void;
   onCourseChange: (course: CourseSpace) => Promise<void>;
   onRefresh: () => Promise<void>;
+  onScopeChange?: (scope: CourseArtifactJob['scope']) => void;
 }) {
   const firstLesson = course.modules.flatMap((item) => item.lessons)[0];
   const initialArtifact = [...artifacts].sort(
@@ -86,6 +93,8 @@ export function CourseWorkspaceExplorer({
   const [selectedFileId, setSelectedFileId] = useState('');
   const [savingStructure, setSavingStructure] = useState(false);
   const [treeMessage, setTreeMessage] = useState('');
+  const [folderMenu, setFolderMenu] = useState<FolderMenu>();
+  const [dropTargetId, setDropTargetId] = useState('');
   const initializedFromArtifacts = useRef(false);
 
   useEffect(() => {
@@ -96,6 +105,16 @@ export function CourseWorkspaceExplorer({
     )[0];
     if (preferred) setScope(preferred.scope);
   }, [artifacts]);
+  useEffect(() => {
+    if (!folderMenu) return;
+    const close = () => setFolderMenu(undefined);
+    window.addEventListener('click', close);
+    window.addEventListener('blur', close);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('blur', close);
+    };
+  }, [folderMenu]);
   const files = useMemo<BrowserFile[]>(() => {
     const latestCourseware = artifacts
       .filter((item) => item.type === 'lesson-courseware' && belongsToScope(item, scope, course))
@@ -145,6 +164,7 @@ export function CourseWorkspaceExplorer({
   const selectScope = (next: Scope) => {
     setScope(next);
     setSelectedFileId('');
+    onScopeChange?.(next);
   };
   const addModule = async () => {
     const title = window.prompt('请输入新模块名称');
@@ -263,6 +283,85 @@ export function CourseWorkspaceExplorer({
     await onRefresh();
     window.alert(executedResult.plan?.result || '课程结构已更新');
   };
+  const runTreeAction = async (body: Record<string, unknown>) => {
+    setSavingStructure(true);
+    setTreeMessage('');
+    try {
+      const response = await fetch(`/api/course-space/${course.id}/tree`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const result = (await response.json().catch(() => undefined)) as
+        | { error?: string }
+        | undefined;
+      if (!response.ok) throw new Error(result?.error || '课程目录操作失败');
+      setSelectedFileId('');
+      await onRefresh();
+      return true;
+    } catch (error) {
+      setTreeMessage(error instanceof Error ? error.message : String(error));
+      return false;
+    } finally {
+      setSavingStructure(false);
+      setDropTargetId('');
+    }
+  };
+  const deleteFolder = async (menu: FolderMenu) => {
+    const isModule = menu.kind === 'module';
+    const courseModule = isModule
+      ? course.modules.find((item) => item.id === menu.id)
+      : undefined;
+    const lesson = !isModule
+      ? course.modules.flatMap((item) => item.lessons).find((item) => item.id === menu.id)
+      : undefined;
+    const fileCount = courseModule
+      ? courseModule.lessons.reduce(
+          (count, item) => count + (item.files?.length ?? 0) + item.materialIds.length,
+          0,
+        )
+      : (lesson?.files?.length ?? 0) + (lesson?.materialIds.length ?? 0);
+    const warning = fileCount
+      ? `\n\n其中包含 ${fileCount} 个课程文件；教学产物也会一并删除，原始材料库记录仍保留。`
+      : '';
+    if (!window.confirm(`确认删除${isModule ? '模块' : '课时文件夹'}“${menu.title}”吗？${warning}`))
+      return;
+    const succeeded = await runTreeAction({
+      action: isModule ? 'delete-module' : 'delete-lesson',
+      [isModule ? 'moduleId' : 'lessonId']: menu.id,
+    });
+    if (succeeded) {
+      selectScope({ type: 'course' });
+      setTreeMessage(`已删除“${menu.title}”。`);
+    }
+  };
+  const startDragging = (
+    event: React.DragEvent<HTMLElement>,
+    item: DragItem,
+  ) => {
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('application/x-mentra-course-item', JSON.stringify(item));
+  };
+  const dropIntoLesson = async (event: React.DragEvent<HTMLElement>, lessonId: string) => {
+    event.preventDefault();
+    const raw = event.dataTransfer.getData('application/x-mentra-course-item');
+    if (!raw) return;
+    try {
+      const item = JSON.parse(raw) as DragItem;
+      const succeeded = await runTreeAction({
+        action: 'move-item',
+        itemKind: item.kind,
+        itemId: item.id,
+        targetLessonId: lessonId,
+      });
+      if (succeeded) {
+        setExpandedLessons((items) => new Set(items).add(lessonId));
+        setTreeMessage('文件已移动到目标课时文件夹。');
+      }
+    } catch {
+      setTreeMessage('拖拽数据无效，请重新操作。');
+    }
+  };
 
   return (
     <div className="overflow-hidden rounded-[26px] border border-white/80 bg-white/90 shadow-[0_28px_80px_-42px_rgba(15,23,42,.45)] backdrop-blur-xl">
@@ -323,6 +422,10 @@ export function CourseWorkspaceExplorer({
               {artifacts.map((artifact) => (
                 <button
                   key={artifact.id}
+                  draggable
+                  onDragStart={(event) =>
+                    startDragging(event, { kind: 'artifact', id: artifact.id })
+                  }
                   title={artifact.title}
                   onClick={() => {
                     setScope(artifact.scope);
@@ -354,7 +457,8 @@ export function CourseWorkspaceExplorer({
                     onClick={() =>
                       setExpanded((items) => {
                         const next = new Set(items);
-                        next.has(module.id) ? next.delete(module.id) : next.add(module.id);
+                        if (next.has(module.id)) next.delete(module.id);
+                        else next.add(module.id);
                         return next;
                       })
                     }
@@ -367,6 +471,16 @@ export function CourseWorkspaceExplorer({
                   </button>
                   <button
                     onClick={() => selectScope({ type: 'module', moduleId: module.id })}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      setFolderMenu({
+                        kind: 'module',
+                        id: module.id,
+                        title: module.title,
+                        x: event.clientX,
+                        y: event.clientY,
+                      });
+                    }}
                     className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left text-xs ${scope.type === 'module' && scope.moduleId === module.id ? 'bg-[#B00055]/10 font-medium text-[#8F0046]' : 'hover:bg-slate-100'}`}
                   >
                     <Folder className="size-4 shrink-0 text-amber-500" />
@@ -408,9 +522,8 @@ export function CourseWorkspaceExplorer({
                                 onClick={() =>
                                   setExpandedLessons((items) => {
                                     const next = new Set(items);
-                                    next.has(lesson.id)
-                                      ? next.delete(lesson.id)
-                                      : next.add(lesson.id);
+                                    if (next.has(lesson.id)) next.delete(lesson.id);
+                                    else next.add(lesson.id);
                                     return next;
                                   })
                                 }
@@ -426,7 +539,24 @@ export function CourseWorkspaceExplorer({
                                   selectScope({ type: 'lesson', lessonId: lesson.id });
                                   setExpandedLessons((items) => new Set(items).add(lesson.id));
                                 }}
-                                className={`my-0.5 flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 py-2 text-left text-xs ${scope.type === 'lesson' && scope.lessonId === lesson.id ? 'bg-[#B00055]/10 font-medium text-[#8F0046]' : 'text-slate-600 hover:bg-slate-100'}`}
+                                onContextMenu={(event) => {
+                                  event.preventDefault();
+                                  setFolderMenu({
+                                    kind: 'lesson',
+                                    id: lesson.id,
+                                    title: lesson.title,
+                                    x: event.clientX,
+                                    y: event.clientY,
+                                  });
+                                }}
+                                onDragOver={(event) => {
+                                  event.preventDefault();
+                                  event.dataTransfer.dropEffect = 'move';
+                                  setDropTargetId(lesson.id);
+                                }}
+                                onDragLeave={() => setDropTargetId('')}
+                                onDrop={(event) => void dropIntoLesson(event, lesson.id)}
+                                className={`my-0.5 flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 py-2 text-left text-xs ${dropTargetId === lesson.id ? 'ring-2 ring-[#B00055]/40 bg-[#B00055]/10' : ''} ${scope.type === 'lesson' && scope.lessonId === lesson.id ? 'bg-[#B00055]/10 font-medium text-[#8F0046]' : 'text-slate-600 hover:bg-slate-100'}`}
                               >
                                 <Folder className="size-3.5 shrink-0 text-[#B00055]" />
                                 <span className="truncate">{lesson.title}</span>
@@ -442,6 +572,10 @@ export function CourseWorkspaceExplorer({
                                 {lessonMaterials.map((material) => (
                                   <button
                                     key={material.id}
+                                    draggable
+                                    onDragStart={(event) =>
+                                      startDragging(event, { kind: 'material', id: material.id })
+                                    }
                                     title={material.name}
                                     onClick={() => {
                                       setScope({ type: 'lesson', lessonId: lesson.id });
@@ -456,6 +590,10 @@ export function CourseWorkspaceExplorer({
                                 {structureFiles.map((file) => (
                                   <button
                                     key={file.id}
+                                    draggable
+                                    onDragStart={(event) =>
+                                      startDragging(event, { kind: 'course-file', id: file.id })
+                                    }
                                     title={file.title}
                                     onClick={() => {
                                       setScope({ type: 'lesson', lessonId: lesson.id });
@@ -470,6 +608,10 @@ export function CourseWorkspaceExplorer({
                                 {artifactFiles.map((artifact) => (
                                   <button
                                     key={artifact.id}
+                                    draggable
+                                    onDragStart={(event) =>
+                                      startDragging(event, { kind: 'artifact', id: artifact.id })
+                                    }
                                     title={artifact.title}
                                     onClick={() => {
                                       setScope({ type: 'lesson', lessonId: lesson.id });
@@ -495,6 +637,28 @@ export function CourseWorkspaceExplorer({
               </div>
             ))}
           </div>
+          {folderMenu && (
+            <div
+              role="menu"
+              className="fixed z-50 min-w-36 rounded-xl border bg-white p-1.5 shadow-xl"
+              style={{ left: folderMenu.x, top: folderMenu.y }}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button
+                role="menuitem"
+                disabled={savingStructure}
+                onClick={() => {
+                  const menu = folderMenu;
+                  setFolderMenu(undefined);
+                  void deleteFolder(menu);
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-red-600 hover:bg-red-50 disabled:opacity-50"
+              >
+                <Trash2 className="size-3.5" />
+                删除
+              </button>
+            </div>
+          )}
         </aside>
         <section className="flex min-h-0 min-w-0 flex-col bg-[#f5f6f8]">
           <div className="flex h-11 shrink-0 items-center justify-between border-b bg-white px-4">

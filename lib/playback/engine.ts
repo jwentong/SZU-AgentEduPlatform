@@ -24,7 +24,7 @@
  */
 
 import type { Scene } from '@/lib/types/stage';
-import type { Action, SpeechAction, DiscussionAction } from '@/lib/types/action';
+import type { Action, SpeechAction } from '@/lib/types/action';
 import type {
   EngineMode,
   TopicState,
@@ -39,7 +39,6 @@ import { ActionEngine } from '@/lib/action/engine';
 import {
   resolvePlaybackCursor,
   estimateSpeechDurationMs,
-  DISCUSSION_TRIGGER_DELAY_MS,
 } from '@/lib/choreography';
 import {
   canJumpWithinReconstructablePrefix,
@@ -478,8 +477,8 @@ export class PlaybackEngine {
       const actions = this.scenes[si].actions || [];
       while (ai < actions.length) {
         const action = actions[ai];
-        // Consumed discussions don't count as remaining work
-        if (action.type === 'discussion' && this.consumedDiscussions.has(action.id)) {
+        // Legacy discussion cues are inert and do not block completion.
+        if (action.type === 'discussion') {
           ai++;
           continue;
         }
@@ -685,39 +684,10 @@ export class PlaybackEngine {
       }
 
       case 'discussion': {
-        const discussionAction = action as DiscussionAction;
-        // Check if already consumed
-        if (this.consumedDiscussions.has(discussionAction.id)) {
-          this.processNext(generation);
-          return;
-        }
-        // Skip if the discussion's agent isn't in the user's selected list
-        if (
-          discussionAction.agentId &&
-          this.callbacks.isAgentSelected &&
-          !this.callbacks.isAgentSelected(discussionAction.agentId)
-        ) {
-          this.markDiscussionConsumed(discussionAction.id);
-          this.processNext(generation);
-          return;
-        }
-
-        // 3s delay before showing ProactiveCard (allows previous speech to finish naturally)
-        const trigger: TriggerEvent = {
-          id: discussionAction.id,
-          question: discussionAction.topic,
-          prompt: discussionAction.prompt,
-          agentId: discussionAction.agentId,
-        };
-
-        this.triggerDelayTimer = setTimeout(() => {
-          if (!this.isCurrentGeneration(generation)) return;
-          this.triggerDelayTimer = null;
-          if (this.mode !== 'playing') return; // Cancelled if user paused/stopped
-          this.currentTrigger = trigger;
-          this.callbacks.onProactiveShow?.(trigger);
-          // Engine pauses here — user calls confirmDiscussion() or skipDiscussion()
-        }, DISCUSSION_TRIGGER_DELAY_MS);
+        // Preserve old documents but do not start a live multi-agent session.
+        queueMicrotask(() => {
+          if (this.isCurrentGeneration(generation)) this.processNext(generation);
+        });
         break;
       }
 

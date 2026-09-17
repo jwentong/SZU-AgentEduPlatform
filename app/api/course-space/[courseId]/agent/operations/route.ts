@@ -3,6 +3,7 @@ import type { TeacherOperationPlan } from '@/lib/course-space/teacher-agent-inte
 import { executeConfirmedTeacherPlan } from '@/lib/server/teacher-course-operations';
 
 export const runtime = 'nodejs';
+export const maxDuration = 180;
 
 export async function POST(request: NextRequest, context: { params: Promise<{ courseId: string }> }) {
   try {

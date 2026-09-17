@@ -2,7 +2,7 @@
 
 /**
  * ActionPicker — portal popover listing the cue types insertable at a given
- * timeline slot (旁白/聚光/激光/讨论). Shared by the header "add" pill and the
+ * timeline slot (旁白/聚光/激光). Shared by the header "add" pill and the
  * inline "+" affordance (wired in Task 5); this component only renders the
  * list and reports the chosen type back via `onSelect`.
  *
@@ -23,7 +23,6 @@ const DESC_KEY: Record<PickerType, string> = {
   speech: 'edit.picker.speechDesc',
   spotlight: 'edit.picker.spotlightDesc',
   laser: 'edit.picker.laserDesc',
-  discussion: 'edit.picker.discussionDesc',
 };
 
 export function ActionPicker({
@@ -73,17 +72,15 @@ export function ActionPicker({
         <div className="px-2 pb-1.5 pt-1 text-[11px] font-medium tracking-wide text-muted-foreground">
           {t('edit.picker.title')}
         </div>
-        {options.map((opt, i) => {
+        {options.map((opt) => {
           const meta = cueMeta(opt.type);
           const Icon = meta.icon;
           return (
             <div key={opt.type}>
-              {opt.type === 'discussion' && i > 0 && <div className="my-1 h-px bg-border/70" />}
               <button
                 type="button"
                 role="menuitem"
                 disabled={opt.disabled}
-                title={opt.disabled ? t('edit.timeline.addDiscussionExists') : undefined}
                 onClick={() => {
                   onSelect(opt.type);
                   onClose();

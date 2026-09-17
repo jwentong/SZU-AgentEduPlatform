@@ -23,13 +23,3 @@ Actions are expressed as objects in a JSON array. Each object has a `type` field
 ```json
 { "type": "action", "name": "laser", "params": { "elementId": "element_id" } }
 ```
-
-### discussion - Interactive Discussion
-
-```json
-{
-  "type": "action",
-  "name": "discussion",
-  "params": { "topic": "Discussion topic", "prompt": "Guiding prompt" }
-}
-```

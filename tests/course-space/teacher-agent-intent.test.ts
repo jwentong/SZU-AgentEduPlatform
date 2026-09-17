@@ -278,4 +278,17 @@ describe('teacher course operation planning', () => {
     });
     expect(plan?.requiresConfirmation).toBe(false);
   });
+
+  it('uses the selected lesson for a course objective command without a week number', () => {
+    const plan = planTeacherWorkspaceOperation('请生成当前课时的课程目标具体内容', course, {
+      type: 'lesson',
+      lessonId: course.modules[0].lessons[0].id,
+    });
+    expect(plan?.action).toMatchObject({
+      type: 'create-lesson-files',
+      lessonIds: [course.modules[0].lessons[0].id],
+      fileTypes: ['lesson-objectives'],
+      populateContent: true,
+    });
+  });
 });

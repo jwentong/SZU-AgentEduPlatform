@@ -57,7 +57,6 @@ import type { SceneType } from '@/lib/types/stage';
 import { ELEMENT_BOUND, cueLabel, cueMeta, elementLabel } from './cue-meta';
 import { applyCuePreview, clearCuePreview, cuePreviewFor } from './cue-preview';
 import {
-  appendDiscussion,
   clampInsertSlot,
   hasDiscussion,
   insertAt,
@@ -947,7 +946,12 @@ function DropZone({
 export function ActionsBar({ sceneId }: { sceneId: string }) {
   const { t } = useI18n();
   const scene = useStageStore((s) => s.scenes.find((x) => x.id === sceneId));
-  const actions = scene?.actions ?? EMPTY;
+  // Keep obsolete discussion data readable in storage, but do not show it as
+  // an editable timeline action or allow it to interrupt normal narration.
+  const actions = useMemo(
+    () => scene?.actions?.filter((action) => action.type !== 'discussion') ?? EMPTY,
+    [scene?.actions],
+  );
   const sceneOrder = scene?.order ?? 0;
   // Element-bound cues (spotlight / laser) point at slide elements, so they only
   // make sense on SLIDE scenes. While the scene hasn't loaded yet, fall back to
@@ -1004,7 +1008,8 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
   // commit (drag / reorder / blur / delete).
   const commit = useCallback(
     (updater: (cur: Action[]) => Action[]) => {
-      const cur = useStageStore.getState().scenes.find((s) => s.id === sceneId)?.actions ?? [];
+      const cur = (useStageStore.getState().scenes.find((s) => s.id === sceneId)?.actions ?? [])
+        .filter((action) => action.type !== 'discussion');
       useStageStore.getState().updateScene(sceneId, { actions: updater(cur) });
     },
     [sceneId],
@@ -1109,17 +1114,11 @@ export function ActionsBar({ sceneId }: { sceneId: string }) {
   const newId = () =>
     typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `a-${Date.now()}`;
 
-  // Insert path for the ActionPicker (header pill / inline "+" drop-zone
-  // buttons): appends a discussion (terminal, at-most-one) or inserts an
-  // ordinary action at a slot, capped before any existing discussion so it
-  // always stays last.
+  // The picker now adds narration and visual cues only. Legacy discussion
+  // clips remain removable from imported classrooms but cannot be added.
   const insertActionAt = useCallback(
     (type: PickerType, slot: number) => {
       const id = newId();
-      if (type === 'discussion') {
-        commit((cur) => appendDiscussion(cur, id));
-        return;
-      }
       const action = makeAction(type, id);
       commit((cur) => insertAt(cur, clampInsertSlot(cur, slot), action));
       if (type === 'speech') setFocusId(id);

@@ -1804,10 +1804,8 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
       const now = Date.now();
       const userMessageId = `user-${now}`;
 
-      // Read all selected agent IDs from settings store
-      const settingsState = useSettingsStore.getState();
-      const agentIds: string[] =
-        settingsState.selectedAgentIds?.length > 0 ? settingsState.selectedAgentIds : ['default-1'];
+      // Live classroom chat is now single-agent Q&A with the AI teacher.
+      const agentIds: string[] = ['default-1'];
 
       const userMessage: UIMessage<ChatMessageMetadata> = {
         id: userMessageId,

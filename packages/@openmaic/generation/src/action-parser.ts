@@ -129,14 +129,12 @@ export function parseActionsFromStructuredOutput(
     }
   }
 
-  // Step 5: Post-processing — discussion must be the last action, and at most one
-  const discussionIdx = actions.findIndex((a) => a.type === 'discussion');
-  if (discussionIdx !== -1 && discussionIdx < actions.length - 1) {
-    actions.splice(discussionIdx + 1);
-  }
+  // Classroom live discussions have been removed. Ignore model-emitted legacy
+  // discussion actions without dropping any narration that follows them.
+  const playableActions = actions.filter((action) => action.type !== 'discussion');
 
   // Step 6: Filter out slide-only actions for non-slide scenes (defense in depth)
-  let result = actions;
+  let result = playableActions;
   if (sceneType && sceneType !== 'slide') {
     const before = result.length;
     result = result.filter((a) => !SLIDE_ONLY_ACTIONS.includes(a.type as ActionType));

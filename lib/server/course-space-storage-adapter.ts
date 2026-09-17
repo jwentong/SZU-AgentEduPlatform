@@ -74,6 +74,7 @@ export interface CourseSpaceStorageAdapter {
   failTeacherTurn(lease: TeacherAgentTurnLease | undefined, error: unknown): Promise<void>;
   readTeacherEvents(sessionId: string, after?: number): Promise<PersistedAgentSessionEvent[]>;
   getTeacherSession(sessionId: string): Promise<AgentSessionMeta | null>;
+  listTeacherSessions(courseId: string, teacherId: string): Promise<AgentSessionMeta[]>;
 }
 
 let agentStorePromise: Promise<PgAgentSessionStore | undefined> | undefined;
@@ -199,6 +200,15 @@ const adapter: CourseSpaceStorageAdapter = {
   async getTeacherSession(sessionId) {
     const store = await getAgentStore();
     return store ? store.getSession(sessionId) : null;
+  },
+
+  async listTeacherSessions(courseId, teacherId) {
+    const store = await getAgentStore();
+    if (!store) return [];
+    const sessions = await store.listSessionsByOwner(teacherId);
+    return sessions
+      .filter((session) => session.stageId === courseId && session.origin === 'course-space')
+      .sort((left, right) => right.updatedAt - left.updatedAt);
   },
 };
 

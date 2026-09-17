@@ -12,6 +12,7 @@ import {
   readServerCourse,
 } from '@/lib/server/course-space-storage';
 import { loadTeacherWorkspaceSkills } from '@/lib/server/teacher-workspace-skills';
+import type { CourseArtifactJob } from '@/lib/course-space/types';
 
 export type TeacherAgentMode = 'deepseek-harness' | 'deepseek-compatible';
 
@@ -132,9 +133,27 @@ export async function runTeacherWorkspaceAgent(input: {
   message: string;
   history?: ChatMessage[];
   attachments?: Array<{ name: string; mimeType: string; dataUrl: string }>;
+  scope?: CourseArtifactJob['scope'];
 }) {
   const context = await refreshTeacherWorkspacePlugins(input.courseId);
   const attachments = input.attachments ?? [];
+  const workingLocation = (() => {
+    const requestedScope = input.scope;
+    if (!requestedScope || requestedScope.type === 'course') return context.course.title;
+    if (requestedScope.type === 'module') {
+      const courseModule = context.course.modules.find(
+        (item) => item.id === requestedScope.moduleId,
+      );
+      return courseModule ? `${context.course.title} / ${courseModule.title}` : context.course.title;
+    }
+    for (const courseModule of context.course.modules) {
+      const lesson = courseModule.lessons.find(
+        (item) => item.id === requestedScope.lessonId,
+      );
+      if (lesson) return `${context.course.title} / ${courseModule.title} / ${lesson.title}`;
+    }
+    return context.course.title;
+  })();
   if (attachments.length) {
     const attachmentDir = path.join(
       context.workspace,
@@ -161,6 +180,7 @@ export async function runTeacherWorkspaceAgent(input: {
     );
   }
   const pluginSummary = [
+    `当前工作位置：${workingLocation}（可读取本课程全部文件夹；未明确其他范围时在此位置工作）`,
     `课程：${context.course.title}`,
     `结构：${context.course.modules.length} 个模块，${context.course.modules.reduce((sum, item) => sum + item.lessons.length, 0)} 个课时`,
     `材料：${context.course.materials.map((item) => `${item.name}(${item.status})`).join('、') || '暂无'}`,

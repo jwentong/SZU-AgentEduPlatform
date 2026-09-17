@@ -5,22 +5,17 @@ import type { Action } from '@/lib/types/action';
 const A = (id: string, type = 'speech'): Action => ({ id, type }) as unknown as Action;
 
 describe('pickerOptions', () => {
-  test('slide scene offers speech + spotlight + laser + discussion', () => {
-    expect(pickerOptions('slide', []).map((o) => o.type)).toEqual([
-      'speech',
-      'spotlight',
-      'laser',
-      'discussion',
-    ]);
+  test('slide scene offers narration and visual cues, but no discussion', () => {
+    expect(pickerOptions('slide', []).map((o) => o.type)).toEqual(['speech', 'spotlight', 'laser']);
   });
   test('non-slide scenes drop element-bound cues', () => {
-    expect(pickerOptions('interactive', []).map((o) => o.type)).toEqual(['speech', 'discussion']);
-    expect(pickerOptions('pbl', []).map((o) => o.type)).toEqual(['speech', 'discussion']);
-    expect(pickerOptions('quiz', []).map((o) => o.type)).toEqual(['speech', 'discussion']);
+    expect(pickerOptions('interactive', []).map((o) => o.type)).toEqual(['speech']);
+    expect(pickerOptions('pbl', []).map((o) => o.type)).toEqual(['speech']);
+    expect(pickerOptions('quiz', []).map((o) => o.type)).toEqual(['speech']);
   });
-  test('discussion is disabled once the scene already has one', () => {
+  test('old discussion actions do not restore the removed picker entry', () => {
     const opts = pickerOptions('slide', [A('d', 'discussion')]);
-    expect(opts.find((o) => o.type === 'discussion')?.disabled).toBe(true);
+    expect(opts.map((o) => o.type)).toEqual(['speech', 'spotlight', 'laser']);
     expect(opts.find((o) => o.type === 'speech')?.disabled).toBe(false);
   });
 });

@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 import { ASR_PROVIDERS } from '@/lib/audio/constants';
+import type { ASRProviderId } from '@/lib/audio/types';
 import { normalizeASRUploadAudio } from '@/lib/audio/wav-utils';
 import { createLogger } from '@/lib/logger';
 
@@ -11,13 +12,15 @@ const log = createLogger('AudioRecorder');
 
 export interface UseAudioRecorderOptions {
   onTranscription?: (text: string) => void;
+  /** Receives the latest full transcript while recording is still active. */
+  onInterimTranscription?: (text: string) => void;
   onError?: (error: string) => void;
   /** When true and using browser-native ASR, recognition stays active until explicitly stopped. */
   continuous?: boolean;
 }
 
 export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
-  const { onTranscription, onError, continuous = false } = options;
+  const { onTranscription, onInterimTranscription, onError, continuous = false } = options;
 
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -30,11 +33,14 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
   const speechRecognitionRef = useRef<any>(null);
   // Synchronous lock to prevent rapid re-entry (React state updates are async)
   const busyRef = useRef(false);
+  const liveProcessingRef = useRef(false);
+  const transcriptionSequenceRef = useRef(0);
 
   // Send audio to server for transcription
   const transcribeAudio = useCallback(
-    async (audioBlob: Blob) => {
-      setIsProcessing(true);
+    async (audioBlob: Blob, interim = false) => {
+      const sequence = ++transcriptionSequenceRef.current;
+      if (!interim) setIsProcessing(true);
 
       try {
         const formData = new FormData();
@@ -81,16 +87,26 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
         }
 
         const result = await response.json();
-        onTranscription?.(result.text);
+        if (result.text) {
+          if (interim) {
+            if (sequence === transcriptionSequenceRef.current) {
+              onInterimTranscription?.(result.text);
+            }
+          } else {
+            onTranscription?.(result.text);
+          }
+        }
       } catch (error) {
         log.error('Transcription error:', error);
         onError?.(error instanceof Error ? error.message : '语音识别失败，请重试');
       } finally {
-        setIsProcessing(false);
-        setRecordingTime(0);
+        if (!interim) {
+          setIsProcessing(false);
+          setRecordingTime(0);
+        }
       }
     },
-    [onTranscription, onError],
+    [onTranscription, onInterimTranscription, onError],
   );
 
   // Start recording
@@ -102,7 +118,31 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
       // Get current ASR configuration
       if (typeof window !== 'undefined') {
         const { useSettingsStore } = await import('@/lib/store/settings');
-        const { asrProviderId, asrLanguage } = useSettingsStore.getState();
+        const settings = useSettingsStore.getState();
+        let { asrProviderId } = settings;
+        const { asrLanguage } = settings;
+
+        // Prefer a managed server ASR when available. Browser-native recognition
+        // depends on a vendor network service and frequently reports `network`
+        // on restricted/campus networks even though microphone access works.
+        if (asrProviderId === 'browser-native') {
+          try {
+            const response = await fetch('/api/server-providers');
+            if (response.ok) {
+              const payload = (await response.json()) as { asr?: Record<string, unknown> };
+              const managedProviderId = Object.keys(payload.asr || {})[0] as
+                | ASRProviderId
+                | undefined;
+              if (managedProviderId) {
+                settings.setASRProvider(managedProviderId);
+                settings.setASREnabled(true);
+                asrProviderId = managedProviderId;
+              }
+            }
+          } catch (providerError) {
+            log.warn('Unable to resolve managed ASR provider:', providerError);
+          }
+        }
 
         // Use browser native ASR if configured
         if (asrProviderId === 'browser-native') {
@@ -117,9 +157,9 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Web Speech API instance shape isn't in lib.dom
           const recognition: any = new SpeechRecognitionCtor();
 
-          recognition.lang = asrLanguage || 'zh-CN';
+          recognition.lang = asrLanguage === 'zh' ? 'zh-CN' : asrLanguage || 'zh-CN';
           recognition.continuous = continuous;
-          recognition.interimResults = false;
+          recognition.interimResults = continuous;
 
           recognition.onstart = () => {
             setIsRecording(true);
@@ -141,20 +181,25 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
               length: number;
             };
           }) => {
-            let transcript = '';
+            let finalTranscript = '';
+            let interimTranscript = '';
             for (let i = event.resultIndex; i < event.results.length; i++) {
               const result = event.results[i];
-              if (result.isFinal && result[0]?.transcript) {
-                transcript += result[0].transcript;
+              if (result[0]?.transcript) {
+                if (result.isFinal) finalTranscript += result[0].transcript;
+                else interimTranscript += result[0].transcript;
               }
             }
-            if (transcript) {
-              onTranscription?.(transcript);
-            }
+            if (interimTranscript) onInterimTranscription?.(interimTranscript);
+            if (finalTranscript) onTranscription?.(finalTranscript);
           };
 
           recognition.onerror = (event: { error: string }) => {
-            log.error('Speech recognition error:', event.error);
+            if (event.error === 'network' || event.error === 'no-speech') {
+              log.warn('Speech recognition unavailable:', event.error);
+            } else {
+              log.error('Speech recognition error:', event.error);
+            }
             let errorMessage = '语音识别失败';
 
             switch (event.error) {
@@ -178,7 +223,26 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
                 errorMessage = '麦克风权限被拒绝';
                 break;
               case 'network':
-                errorMessage = '网络错误';
+                errorMessage = '浏览器语音服务网络不可用，请检查网络或在设置中配置服务器 ASR';
+                void (async () => {
+                  try {
+                    const response = await fetch('/api/server-providers');
+                    if (!response.ok) return;
+                    const payload = (await response.json()) as {
+                      asr?: Record<string, unknown>;
+                    };
+                    const fallbackProviderId = Object.keys(payload.asr || {})[0];
+                    if (!fallbackProviderId) return;
+
+                    const { useSettingsStore } = await import('@/lib/store/settings');
+                    const settings = useSettingsStore.getState();
+                    settings.setASRProvider(fallbackProviderId as ASRProviderId);
+                    settings.setASREnabled(true);
+                    onError?.('浏览器语音服务不可用，已切换到服务器语音识别，请再次点击麦克风');
+                  } catch (fallbackError) {
+                    log.warn('Unable to activate server ASR fallback:', fallbackError);
+                  }
+                })();
                 break;
               default:
                 errorMessage = `语音识别错误: ${event.error}`;
@@ -225,6 +289,13 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           audioChunksRef.current.push(event.data);
+          if (continuous && mediaRecorder.state === 'recording' && !liveProcessingRef.current) {
+            liveProcessingRef.current = true;
+            const currentAudio = new Blob([...audioChunksRef.current], { type: 'audio/webm' });
+            void transcribeAudio(currentAudio, true).finally(() => {
+              liveProcessingRef.current = false;
+            });
+          }
         }
       };
 
@@ -243,7 +314,8 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
       };
 
       // Start recording
-      mediaRecorder.start();
+      if (continuous) mediaRecorder.start(3000);
+      else mediaRecorder.start();
       setIsRecording(true);
       setRecordingTime(0);
 
@@ -256,7 +328,7 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
       log.error('Failed to start recording:', error);
       onError?.('无法访问麦克风，请检查权限设置');
     }
-  }, [onTranscription, onError, transcribeAudio, continuous]);
+  }, [onTranscription, onInterimTranscription, onError, transcribeAudio, continuous]);
 
   // Stop recording
   const stopRecording = useCallback(() => {

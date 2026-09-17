@@ -22,6 +22,15 @@ describe('action parser', () => {
       ),
     ).toEqual([]);
   });
+
+  it('drops obsolete live discussion actions but preserves later narration', () => {
+    const actions = parseActionsFromStructuredOutput(
+      '[{"type":"text","content":"Before"},{"type":"action","name":"discussion","params":{"topic":"Old"}},{"type":"text","content":"After"}]',
+      'slide',
+    );
+    expect(actions.map((action) => action.type)).toEqual(['speech', 'speech']);
+    expect(actions.map((action) => 'text' in action ? action.text : '')).toEqual(['Before', 'After']);
+  });
 });
 
 describe('interactive HTML post-processing', () => {

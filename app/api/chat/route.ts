@@ -64,6 +64,11 @@ export async function POST(req: NextRequest) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'Missing required field: config.agentIds');
     }
 
+    // Keep single-agent Q&A, but do not expose live multi-agent discussions.
+    if (body.config.sessionType === 'discussion' || body.config.agentIds.length !== 1) {
+      return apiError('INVALID_REQUEST', 410, 'Classroom live multi-agent discussion has been removed');
+    }
+
     const {
       model: languageModel,
       apiKey: resolvedApiKey,

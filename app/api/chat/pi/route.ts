@@ -73,6 +73,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    if (body.config.sessionType === 'discussion' || agentIds.length !== 1) {
+      return apiError('INVALID_REQUEST', 410, 'Classroom live multi-agent discussion has been removed');
+    }
+
     const {
       model: languageModel,
       apiKey: resolvedApiKey,

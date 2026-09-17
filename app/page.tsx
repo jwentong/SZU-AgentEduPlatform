@@ -81,6 +81,7 @@ import { useImportClassroom } from '@/lib/import/use-import-classroom';
 import { isPptxImportEnabled, shouldShowVocationalTestUi } from '@/lib/config/feature-flags';
 import { useImportPptx } from '@/lib/import/use-import-pptx';
 import type { CourseSourceFingerprint } from '@/lib/course-governance/contracts';
+import type { TeacherOperationPlan } from '@/lib/course-space/teacher-agent-intent';
 import { fingerprintCoursewareFile } from '@/lib/course-governance/fingerprint';
 import {
   buildImportedPptDraft,
@@ -123,7 +124,7 @@ const initialFormState: FormState = {
   vocationalTestMode: false,
 };
 
-function HomePage() {
+function HomePage({ embedded = false, courseId, scope = 'course', location }: { embedded?: boolean; courseId?: string; scope?: string; location?: string }) {
   const { t } = useI18n();
   const { theme, setTheme } = useTheme();
   const router = useRouter();
@@ -189,6 +190,11 @@ function HomePage() {
 
   const [themeOpen, setThemeOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [teacherCommandBusy, setTeacherCommandBusy] = useState(false);
+  const [teacherCommandResult, setTeacherCommandResult] = useState<string | null>(null);
+  const [pendingTeacherPlan, setPendingTeacherPlan] = useState<TeacherOperationPlan | null>(null);
+  const [pendingCoursewareInstruction, setPendingCoursewareInstruction] = useState<string | null>(null);
+  const teacherSessionId = useRef(`teacher-workbench-${nanoid()}`);
   const [classrooms, setClassrooms] = useState<StageListItem[]>([]);
   const [thumbnails, setThumbnails] = useState<Record<string, Slide>>({});
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
@@ -349,7 +355,8 @@ function HomePage() {
           ? '已进入高保真路径，请先审核页面内容'
           : '已启用 Learning Skills，请先审核原 PPT 内容',
       );
-      router.push('/generation-preview');
+      if (embedded && courseId) window.parent.postMessage({ type: 'teacher-workbench-open-preview', courseId }, window.location.origin);
+      else router.push('/generation-preview');
     } catch (error) {
       await removeImportedPptSlides(pptxImportStorageKey).catch(() => undefined);
       log.error('Failed to start PPTX structured generation:', error);
@@ -581,7 +588,7 @@ function HomePage() {
     }));
   };
 
-  const handleGenerate = async (modeOverride?: CoursewareConversionMode) => {
+  const handleGenerate = async (modeOverride?: CoursewareConversionMode, instructionOverride?: string) => {
     // No model/provider guard here: generation is gated by `canGenerate`
     // (requires a usable provider), and under the #580 invariant a usable
     // provider always has a concrete model. State A (no usable provider)
@@ -596,7 +603,11 @@ function HomePage() {
       return;
     }
 
-    if (!form.requirement.trim() && form.courseMaterials.length === 0) {
+    if (!hasUsableProvider) {
+      setError('请先配置可用的模型服务，再生成课件。');
+      return;
+    }
+    if (!instructionOverride?.trim() && !form.requirement.trim() && form.courseMaterials.length === 0) {
       setError(t('upload.requirementRequired'));
       return;
     }
@@ -613,12 +624,15 @@ function HomePage() {
           ? 'pdf'
           : 'document';
       const baseRequirement =
-        form.requirement.trim() || '请根据教师上传的教学材料生成可自动播放的课堂课件。';
+        instructionOverride?.trim() || form.requirement.trim() || '请根据教师上传的教学材料生成可自动播放的课堂课件。';
+      const scopedRequirement = embedded && location
+        ? `${baseRequirement}\n\n当前课程工作目录：${location}。请围绕此目录对应的教学范围生成内容。`
+        : baseRequirement;
       const effectiveRequirement = conversionMode
         ? conversionMode === 'learning-skills-enhanced'
-          ? buildLearningSkillsEnhancementRequirement(baseRequirement, sourceKind)
-          : [baseRequirement, buildFaithfulCoursewareRequirement(sourceKind)].join('\n\n')
-        : baseRequirement;
+          ? buildLearningSkillsEnhancementRequirement(scopedRequirement, sourceKind)
+          : [scopedRequirement, buildFaithfulCoursewareRequirement(sourceKind)].join('\n\n')
+        : scopedRequirement;
       const requirements: UserRequirements = {
         requirement: effectiveRequirement,
         userNickname: userProfile.nickname || undefined,
@@ -709,10 +723,18 @@ function HomePage() {
           : undefined,
         conversionMode: conversionMode || undefined,
         sourceFingerprint,
+        courseSpaceContext: embedded && courseId ? {
+          courseId,
+          scope: scope.startsWith('module:')
+            ? { type: 'module' as const, moduleId: scope.slice(7) }
+            : scope.startsWith('lesson:')
+              ? { type: 'lesson' as const, lessonId: scope.slice(7) }
+              : { type: 'course' as const },
+        } : undefined,
       };
       sessionStorage.setItem('generationSession', JSON.stringify(sessionState));
-
-      router.push('/generation-preview');
+      if (embedded && courseId) window.parent.postMessage({ type: 'teacher-workbench-open-preview', courseId }, window.location.origin);
+      else router.push('/generation-preview');
     } catch (err) {
       log.error('Error preparing generation:', err);
       setError(err instanceof Error ? err.message : t('upload.generateFailed'));
@@ -752,16 +774,130 @@ function HomePage() {
 
   const canGenerate =
     (!!form.requirement.trim() || form.courseMaterials.length > 0) && hasUsableProvider;
+  const commandScope = () => scope.startsWith('module:')
+    ? { type: 'module' as const, moduleId: scope.slice(7) }
+    : scope.startsWith('lesson:')
+      ? { type: 'lesson' as const, lessonId: scope.slice(7) }
+      : { type: 'course' as const };
 
+  const executeTeacherPlan = async (plan: TeacherOperationPlan) => {
+    if (!courseId) return;
+    const response = await fetch(`/api/course-space/${encodeURIComponent(courseId)}/agent/operations`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ plan }),
+    });
+    const data = await response.json();
+    if (!response.ok || data.success === false) throw new Error(data.error || '执行备课任务失败');
+    if (data.dispatch === 'artifact-workflow') {
+      const action = plan.action;
+      if (action?.type !== 'generate-artifact') throw new Error('产物任务缺少生成类型。');
+      if (action.artifactType === 'lesson-courseware') {
+        void handleGenerate(undefined, action.instruction || form.requirement);
+        return '正在打开课件生成流程。';
+      }
+      const jobResponse = await fetch(`/api/course-space/${encodeURIComponent(courseId)}/jobs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ artifactTypes: [action.artifactType], scope: action.scope || commandScope() }),
+      });
+      const jobData = await jobResponse.json();
+      if (!jobResponse.ok || jobData.success === false) throw new Error(jobData.error || '创建教学产物任务失败');
+      const jobId = jobData.jobs?.[0]?.id;
+      window.parent.postMessage(jobId
+        ? { type: 'teacher-workbench-open-job', courseId, jobId }
+        : { type: 'teacher-workbench-course-updated', courseId }, window.location.origin);
+      return '教学产物任务已创建，正在打开生成与审核页面。';
+    }
+    window.parent.postMessage({ type: 'teacher-workbench-course-updated', courseId }, window.location.origin);
+    return data.plan?.result || '备课内容已生成并保存到当前课时文件夹。';
+  };
+
+  const sendTeacherCommand = async (command: string) => {
+    const message = command.trim();
+    if (!embedded || !courseId || !message || teacherCommandBusy) return;
+    if (/课件|幻灯片|\bPPT\b/iu.test(message)) {
+      setError(null);
+      setPendingTeacherPlan(null);
+      setPendingCoursewareInstruction(message);
+      setTeacherCommandResult(`将根据当前工作目录和教师指令生成课件。确认后进入 OpenMAIC 课件生成与预览流程。\n教师指令：${message}`);
+      return;
+    }
+    if (/(?:生成|创建|编写|撰写).*(?:课程目标|课时目标|学习目标|知识点|教学活动)/u.test(message)
+      && !scope.startsWith('lesson:')
+      && !/第[一二三四五六七八九十\d]+(?:周|课时)/u.test(message)) {
+      setError('请先选择课时文件夹，或在命令中明确第几周。');
+      return;
+    }
+    setTeacherCommandBusy(true);
+    setError(null);
+    setTeacherCommandResult(null);
+    setPendingTeacherPlan(null);
+    setPendingCoursewareInstruction(null);
+    try {
+      const response = await fetch(`/api/course-space/${encodeURIComponent(courseId)}/agent`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sessionId: teacherSessionId.current, message, scope: commandScope() }),
+      });
+      const data = await response.json();
+      if (!response.ok || data.success === false) throw new Error(data.error || '备课智能体响应失败');
+      const plan = data.plan as TeacherOperationPlan | undefined;
+      if (plan?.action?.type === 'create-lesson-files' && plan.action.populateContent && plan.action.lessonIds.length === 1) {
+        window.parent.postMessage({ type: 'teacher-workbench-open-plan', courseId, plan }, window.location.origin);
+        setTeacherCommandResult('已创建备课计划，正在打开确认与审核页面。');
+      } else if (plan?.action && plan.requiresConfirmation) {
+        setPendingTeacherPlan(plan);
+        setTeacherCommandResult(plan.summary);
+      } else if (plan?.action && plan.status === 'planned') {
+        setTeacherCommandResult(await executeTeacherPlan(plan));
+      } else {
+        setTeacherCommandResult(data.text || '命令已处理。');
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '命令执行失败');
+    } finally {
+      setTeacherCommandBusy(false);
+    }
+  };
+
+  const runLessonShortcut = (command: string) => {
+    if (!scope.startsWith('lesson:')) {
+      setError('请先在“当前工作位置”选择具体课时文件夹，再使用此快捷任务。');
+      return;
+    }
+    void sendTeacherCommand(command);
+  };
+
+  const confirmTeacherPlan = async () => {
+    if (!pendingTeacherPlan || teacherCommandBusy) return;
+    setTeacherCommandBusy(true);
+    try {
+      setTeacherCommandResult(await executeTeacherPlan(pendingTeacherPlan));
+      setPendingTeacherPlan(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '命令执行失败');
+    } finally {
+      setTeacherCommandBusy(false);
+    }
+  };
+  const confirmCourseware = () => {
+    if (!pendingCoursewareInstruction) return;
+    const instruction = pendingCoursewareInstruction;
+    setPendingCoursewareInstruction(null);
+    setTeacherCommandResult('正在打开课件生成预览页面。');
+    void handleGenerate(undefined, instruction);
+  };
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
-      if (canGenerate) handleGenerate();
+      if (embedded) void sendTeacherCommand(form.requirement);
+      else if (canGenerate) void handleGenerate();
     }
   };
 
   return (
-    <div className="min-h-[100dvh] w-full bg-[radial-gradient(circle_at_24%_4%,rgba(176,0,85,0.10),transparent_34%),radial-gradient(circle_at_78%_82%,rgba(193,19,104,0.07),transparent_38%),linear-gradient(180deg,#fffdfE_0%,#fbf7f9_100%)] dark:bg-[radial-gradient(circle_at_24%_4%,rgba(176,0,85,0.18),transparent_34%),radial-gradient(circle_at_78%_82%,rgba(193,19,104,0.10),transparent_38%),linear-gradient(180deg,#170b12_0%,#0f090d_100%)] flex flex-col items-center p-4 pt-16 md:p-8 md:pt-16 overflow-x-hidden">
+    <div className={cn("min-h-[100dvh] w-full bg-[radial-gradient(circle_at_24%_4%,rgba(176,0,85,0.10),transparent_34%),radial-gradient(circle_at_78%_82%,rgba(193,19,104,0.07),transparent_38%),linear-gradient(180deg,#fffdfE_0%,#fbf7f9_100%)] dark:bg-[radial-gradient(circle_at_24%_4%,rgba(176,0,85,0.18),transparent_34%),radial-gradient(circle_at_78%_82%,rgba(193,19,104,0.10),transparent_38%),linear-gradient(180deg,#170b12_0%,#0f090d_100%)] flex flex-col items-center p-4 overflow-x-hidden", embedded ? "justify-center" : "pt-16 md:p-8 md:pt-16")}>
       <input
         ref={fileInputRef}
         type="file"
@@ -790,7 +926,7 @@ function HomePage() {
       {/* ═══ Top-right pill (unchanged) ═══ */}
       <div
         ref={toolbarRef}
-        className="fixed top-4 right-4 z-50 flex items-center gap-1 bg-white/60 dark:bg-gray-800/60 backdrop-blur-md px-2 py-1.5 rounded-full border border-gray-100/50 dark:border-gray-700/50 shadow-sm"
+        className={cn("fixed top-4 right-4 z-50 flex items-center gap-1 bg-white/60 dark:bg-gray-800/60 backdrop-blur-md px-2 py-1.5 rounded-full border border-gray-100/50 dark:border-gray-700/50 shadow-sm", embedded && "hidden")}
       >
         {/* Language Selector */}
         <LanguageSwitcher onOpen={() => setThemeOpen(false)} />
@@ -895,10 +1031,10 @@ function HomePage() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6, ease: 'easeOut' }}
-        className={cn('relative z-20 w-full max-w-[800px] flex flex-col items-center mt-[10vh]')}
+        className={cn('relative z-20 w-full max-w-[800px] flex flex-col items-center', !embedded && 'mt-[10vh]')}
       >
         {/* ── Logo ── */}
-        <motion.div
+        {!embedded && <motion.div
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{
@@ -911,19 +1047,19 @@ function HomePage() {
           aria-label="MENTRA"
         >
           <img src="/mentra-logo.svg" alt="MENTRA" className="h-16 md:h-24 w-auto" />
-        </motion.div>
+        </motion.div>}
 
         {/* ── Slogan ── */}
-        <motion.p
+        {!embedded && <motion.p
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.25 }}
           className="text-sm text-muted-foreground/60 mb-8"
         >
           Multi-agent Education Network for Teaching, Reflection &amp; Assessment
-        </motion.p>
+        </motion.p>}
 
-        <motion.div
+        {!embedded && <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.3 }}
@@ -939,7 +1075,7 @@ function HomePage() {
           >
             <LibraryBig className="size-4" />完整课程体系
           </Button>
-        </motion.div>
+        </motion.div>}
 
         {/* ── Unified input area ── */}
         <motion.div
@@ -948,11 +1084,19 @@ function HomePage() {
           transition={{ delay: 0.35 }}
           className="w-full"
         >
+          {embedded && <div className="mb-3 flex flex-wrap items-center gap-2" aria-label="备课快捷任务">
+            {[
+              ['课程目标', '请生成当前课时的课程目标具体内容'],
+              ['知识点', '请生成当前课时的知识点具体内容'],
+              ['教学活动', '请生成当前课时的教学活动具体内容'],
+            ].map(([label, command]) => <button key={label} type="button" disabled={teacherCommandBusy} onClick={() => runLessonShortcut(command)} className="rounded-full border border-[#B00055]/20 bg-white/85 px-3 py-1.5 text-xs font-medium text-[#B00055] hover:bg-[#B00055]/10 disabled:opacity-50">{label}</button>)}
+            <button type="button" disabled={teacherCommandBusy || !hasUsableProvider} onClick={() => void sendTeacherCommand(form.requirement.trim() || '请结合当前工作目录与课程材料生成一节 AI 增强课件。')} className="rounded-full border border-[#B00055]/20 bg-white/85 px-3 py-1.5 text-xs font-medium text-[#B00055] hover:bg-[#B00055]/10 disabled:opacity-50">课件</button>
+          </div>}
           <div className="w-full rounded-2xl border border-border/60 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl shadow-xl shadow-black/[0.03] dark:shadow-black/20 transition-shadow focus-within:border-[#B00055]/20 focus-within:shadow-2xl focus-within:shadow-[#B00055]/[0.07]">
             {/* Textarea */}
             <textarea
               ref={textareaRef}
-              placeholder={t('upload.requirementPlaceholder')}
+              placeholder={embedded ? '输入备课命令，例如：生成当前课时的课程目标、知识点或教学活动；也可以要求生成课件…' : t('upload.requirementPlaceholder')}
               className="w-full resize-none border-0 bg-transparent px-4 pt-4 pb-2 text-[13px] leading-relaxed placeholder:text-muted-foreground/40 focus:outline-none min-h-[156px] max-h-[300px]"
               value={form.requirement}
               onChange={(e) => updateForm('requirement', e.target.value)}
@@ -1022,23 +1166,28 @@ function HomePage() {
 
               {/* Send button */}
               <button
-                onClick={() => void handleGenerate()}
-                disabled={!canGenerate}
+                onClick={() => embedded ? void sendTeacherCommand(form.requirement) : void handleGenerate()}
+                disabled={embedded ? !form.requirement.trim() || teacherCommandBusy : !canGenerate}
                 className={cn(
                   'shrink-0 h-8 rounded-lg flex items-center justify-center gap-1.5 transition-all px-3',
-                  canGenerate
+                  (embedded ? Boolean(form.requirement.trim()) && !teacherCommandBusy : canGenerate)
                     ? 'bg-primary text-primary-foreground hover:opacity-90 shadow-sm cursor-pointer'
                     : 'bg-muted text-muted-foreground/40 cursor-not-allowed',
                 )}
               >
-                <span className="text-xs font-medium">{t('toolbar.enterClassroom')}</span>
+                <span className="text-xs font-medium">{embedded ? teacherCommandBusy ? '执行中…' : '发送命令' : t('toolbar.enterClassroom')}</span>
                 <ArrowUp className="size-3.5" />
               </button>
             </div>
           </div>
+          {embedded && (teacherCommandResult || pendingTeacherPlan || pendingCoursewareInstruction) && <div className="mt-3 rounded-xl border border-[#B00055]/15 bg-white/90 p-3 text-xs text-slate-700" role="status">
+            <p className="whitespace-pre-wrap">{teacherCommandResult}</p>
+            {pendingTeacherPlan && <div className="mt-2 flex gap-2"><button type="button" disabled={teacherCommandBusy} onClick={() => void confirmTeacherPlan()} className="rounded-lg bg-[#B00055] px-3 py-1.5 font-medium text-white">确认执行</button><button type="button" onClick={() => { setPendingTeacherPlan(null); setTeacherCommandResult(null); }} className="rounded-lg border px-3 py-1.5">取消</button></div>}
+            {pendingCoursewareInstruction && <div className="mt-2 flex gap-2"><button type="button" onClick={confirmCourseware} className="rounded-lg bg-[#B00055] px-3 py-1.5 font-medium text-white">确认生成课件</button><button type="button" onClick={() => { setPendingCoursewareInstruction(null); setTeacherCommandResult(null); }} className="rounded-lg border px-3 py-1.5">取消</button></div>}
+          </div>}
         </motion.div>
 
-        {showVocationalTestUi && (
+        {showVocationalTestUi && !embedded && (
           <motion.div
             initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0 }}
@@ -1106,7 +1255,7 @@ function HomePage() {
           the New-folder / import / search actions, so a brand-new user with
           zero courses and zero folders can still create the first folder or
           import. One stable action surface across root, folder, and empty. */}
-      {hydrated && (
+      {hydrated && !embedded && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -1408,9 +1557,9 @@ function HomePage() {
       />
 
       {/* Footer — flows with content, at the very end */}
-      <div className="mt-auto pt-12 pb-4 text-center text-xs text-muted-foreground/40">
+      {!embedded && <div className="mt-auto pt-12 pb-4 text-center text-xs text-muted-foreground/40">
         MENTRA · Multi-agent Education Network for Teaching, Reflection &amp; Assessment
-      </div>
+      </div>}
     </div>
   );
 }
@@ -1955,5 +2104,47 @@ function ClassroomCard({
 }
 
 export default function Page() {
-  return <HomePage />;
+  const router = useRouter();
+  const [view, setView] = useState<{ mode: 'welcome' | 'generate' | 'embedded'; courseId?: string; scope?: string; location?: string }>({ mode: 'welcome' });
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const params = new URLSearchParams(window.location.search);
+      setView({ mode: params.get('view') === 'generate' ? params.get('embed') === '1' ? 'embedded' : 'generate' : 'welcome', courseId: params.get('courseId') || undefined, scope: params.get('scope') || undefined, location: params.get('location') || undefined });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    const updateScope = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin || event.source !== window.parent) return;
+      const data = event.data as { type?: string; courseId?: string; scope?: string; location?: string };
+      if (data.type !== 'teacher-workbench-scope' || !data.scope || !data.location) return;
+      setView((current) => {
+        if (current.mode !== 'embedded' || current.courseId !== data.courseId) return current;
+        if (current.scope === data.scope && current.location === data.location) return current;
+        return { ...current, scope: data.scope, location: data.location };
+      });
+    };
+    window.addEventListener('message', updateScope);
+    return () => window.removeEventListener('message', updateScope);
+  }, []);
+  useEffect(() => {
+    if (view.mode === 'embedded' && view.courseId)
+      window.parent.postMessage({ type: 'teacher-workbench-ready' }, window.location.origin);
+  }, [view.mode, view.courseId]);
+
+  if (view.mode !== 'welcome') return <HomePage embedded={view.mode === 'embedded'} courseId={view.courseId} scope={view.scope} location={view.location} />;
+
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_25%_15%,rgba(176,0,85,.13),transparent_35%),radial-gradient(circle_at_80%_75%,rgba(59,130,246,.09),transparent_38%),#fcf8fa] px-6 text-slate-900">
+      <div className="w-full max-w-3xl rounded-[36px] border border-white/80 bg-white/75 px-8 py-16 text-center shadow-[0_35px_90px_-45px_rgba(98,23,59,.3)] backdrop-blur-xl sm:px-16">
+        <img src="/mentra-logo.svg" alt="MENTRA" className="mx-auto h-24 w-auto sm:h-32" />
+        <p className="mt-7 text-sm tracking-wide text-slate-500">Multi-agent Education Network for Teaching, Reflection &amp; Assessment</p>
+        <h1 className="mt-10 text-3xl font-semibold tracking-tight sm:text-4xl">欢迎来到教师课程工作区</h1>
+        <p className="mx-auto mt-4 max-w-xl text-sm leading-7 text-slate-600">从课程进入，查看建设状态，并在 Class 工作页制作课件、整理教学产物和协同备课。</p>
+        <Button className="mt-10 h-12 rounded-full bg-[#B00055] px-9 text-base hover:bg-[#8F0046]" onClick={() => router.push('/course-space')}>欢迎进入课程 <ChevronRight className="ml-2 size-5" /></Button>
+      </div>
+    </main>
+  );
 }
