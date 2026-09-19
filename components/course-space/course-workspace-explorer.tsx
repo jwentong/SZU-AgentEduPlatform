@@ -9,6 +9,7 @@ import {
   FileText,
   Folder,
   History,
+  GripVertical,
   Plus,
   Presentation,
   Sparkles,
@@ -71,6 +72,7 @@ export function CourseWorkspaceExplorer({
   onCourseChange,
   onRefresh,
   onScopeChange,
+  height = 790,
 }: {
   course: CourseSpace;
   artifacts: CourseArtifactRecord[];
@@ -78,6 +80,7 @@ export function CourseWorkspaceExplorer({
   onCourseChange: (course: CourseSpace) => Promise<void>;
   onRefresh: () => Promise<void>;
   onScopeChange?: (scope: CourseArtifactJob['scope']) => void;
+  height?: number;
 }) {
   const firstLesson = course.modules.flatMap((item) => item.lessons)[0];
   const initialArtifact = [...artifacts].sort(
@@ -96,6 +99,39 @@ export function CourseWorkspaceExplorer({
   const [folderMenu, setFolderMenu] = useState<FolderMenu>();
   const [dropTargetId, setDropTargetId] = useState('');
   const initializedFromArtifacts = useRef(false);
+  const explorerRef = useRef<HTMLDivElement>(null);
+  const [treeWidth, setTreeWidth] = useState(220);
+
+  useEffect(() => {
+    const saved = Number(window.localStorage.getItem('mentra.course-tree-width'));
+    if (Number.isFinite(saved) && saved >= 160 && saved <= 480) setTreeWidth(saved);
+  }, []);
+
+  const startTreeResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = treeWidth;
+    const move = (pointerEvent: PointerEvent) => {
+      const containerWidth = explorerRef.current?.getBoundingClientRect().width ?? 1200;
+      setTreeWidth(Math.round(Math.min(Math.max(160, startWidth + pointerEvent.clientX - startX), Math.min(480, containerWidth * 0.46))));
+    };
+    const stop = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', stop);
+      window.removeEventListener('pointercancel', stop);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      setTreeWidth((width) => {
+        window.localStorage.setItem('mentra.course-tree-width', String(width));
+        return width;
+      });
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop, { once: true });
+    window.addEventListener('pointercancel', stop, { once: true });
+  };
 
   useEffect(() => {
     if (initializedFromArtifacts.current || artifacts.length === 0) return;
@@ -367,8 +403,8 @@ export function CourseWorkspaceExplorer({
     <div className="overflow-hidden rounded-[26px] border border-white/80 bg-white/90 shadow-[0_28px_80px_-42px_rgba(15,23,42,.45)] backdrop-blur-xl">
       {/* Course tree + the real OpenMAIC Pro workspace. The embedded classroom
         owns the per-page outline rail and narration/action timeline. */}
-      <div className="grid h-[790px] min-h-0 grid-cols-[220px_minmax(0,1fr)] max-[900px]:grid-cols-[190px_minmax(0,1fr)]">
-        <aside className="min-h-0 overflow-y-auto border-r bg-[#faf8fb] p-3">
+      <div ref={explorerRef} className="grid min-h-0" style={{ height, gridTemplateColumns: `${treeWidth}px 8px minmax(0, 1fr)` }}>
+        <aside className="min-h-0 overflow-y-auto bg-[#faf8fb] p-3">
           <div className="mb-3 rounded-xl bg-[#B00055] px-3 py-3 text-white">
             <div className="flex items-center gap-2">
               <BookOpen className="size-4" />
@@ -660,6 +696,28 @@ export function CourseWorkspaceExplorer({
             </div>
           )}
         </aside>
+        <div
+          role="separator"
+          aria-label="调整课程目录宽度"
+          aria-orientation="vertical"
+          aria-valuemin={160}
+          aria-valuemax={480}
+          aria-valuenow={treeWidth}
+          tabIndex={0}
+          onPointerDown={startTreeResize}
+          onKeyDown={(event) => {
+            if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+            event.preventDefault();
+            setTreeWidth((width) => {
+              const next = Math.min(480, Math.max(160, width + (event.key === 'ArrowRight' ? 16 : -16)));
+              window.localStorage.setItem('mentra.course-tree-width', String(next));
+              return next;
+            });
+          }}
+          className="group relative z-10 cursor-col-resize touch-none border-x border-slate-200 bg-white/80 outline-none hover:bg-[#B00055]/10 focus:bg-[#B00055]/10"
+        >
+          <GripVertical className="absolute left-1/2 top-1/2 size-4 -translate-x-1/2 -translate-y-1/2 text-slate-300 group-hover:text-[#B00055] group-focus:text-[#B00055]" />
+        </div>
         <section className="flex min-h-0 min-w-0 flex-col bg-[#f5f6f8]">
           <div className="flex h-11 shrink-0 items-center justify-between border-b bg-white px-4">
             <div className="min-w-0">

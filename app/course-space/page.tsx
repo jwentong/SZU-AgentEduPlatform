@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { nanoid } from 'nanoid';
-import { ArrowLeft, LayoutGrid } from 'lucide-react';
+import { ArrowLeft, GripHorizontal, LayoutGrid } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { CoursewareModeDialog } from '@/components/generation/courseware-mode-dialog';
 import { CourseWorkspaceExplorer } from '@/components/course-space/course-workspace-explorer';
@@ -72,6 +72,7 @@ export default function CourseSpacePage() {
   const repository = useMemo(() => new ApiCourseSpaceRepository(), []);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workbenchFrameRef = useRef<HTMLIFrameElement>(null);
+  const verticalSplitRef = useRef<HTMLDivElement>(null);
   const [courses, setCourses] = useState<CourseSpace[]>([]);
   const [selectedId, setSelectedId] = useState<string>();
   const [jobs, setJobs] = useState<CourseArtifactJob[]>([]);
@@ -87,7 +88,43 @@ export default function CourseSpacePage() {
   const [coursewareMaterialId, setCoursewareMaterialId] = useState('');
   const [launchingCourseware, setLaunchingCourseware] = useState(false);
   const [workspaceCourseId, setWorkspaceCourseId] = useState<string | null | undefined>();
+  const [courseAreaHeight, setCourseAreaHeight] = useState(790);
+  const [workbenchHeight, setWorkbenchHeight] = useState(500);
   const selected = courses.find((course) => course.id === selectedId);
+
+  useEffect(() => {
+    const savedTop = Number(window.localStorage.getItem('mentra.course-area-height'));
+    const savedBottom = Number(window.localStorage.getItem('mentra.workbench-height'));
+    if (Number.isFinite(savedTop) && savedTop >= 420 && savedTop <= 1100) setCourseAreaHeight(savedTop);
+    if (Number.isFinite(savedBottom) && savedBottom >= 300 && savedBottom <= 850) setWorkbenchHeight(savedBottom);
+  }, []);
+
+  const startVerticalResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startTop = courseAreaHeight;
+    const startBottom = workbenchHeight;
+    const move = (pointerEvent: PointerEvent) => {
+      const delta = pointerEvent.clientY - startY;
+      const limited = Math.min(1100 - startTop, startBottom - 300, Math.max(420 - startTop, delta));
+      setCourseAreaHeight(Math.round(startTop + limited));
+      setWorkbenchHeight(Math.round(startBottom - limited));
+    };
+    const stop = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', stop);
+      window.removeEventListener('pointercancel', stop);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      setCourseAreaHeight((value) => { window.localStorage.setItem('mentra.course-area-height', String(value)); return value; });
+      setWorkbenchHeight((value) => { window.localStorage.setItem('mentra.workbench-height', String(value)); return value; });
+    };
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop, { once: true });
+    window.addEventListener('pointercancel', stop, { once: true });
+  };
 
   const refresh = useCallback(async (preferredId?: string) => {
     const items = await repository.listByTeacher(DEFAULT_TEACHER_ID);
@@ -240,6 +277,7 @@ export default function CourseSpacePage() {
       if (event.data?.courseId !== selected.id) return;
       if (event.data.type === 'teacher-workbench-course-updated') void refresh(selected.id);
       if (event.data.type === 'teacher-workbench-open-preview') router.push('/generation-preview');
+      if (event.data.type === 'teacher-workbench-open-knowledge-graph') router.push(`/course-space/${encodeURIComponent(selected.id)}/knowledge-graph/manage`);
       if (event.data.type === 'teacher-workbench-open-job' && typeof event.data.jobId === 'string') {
         router.push(`/course-space/${encodeURIComponent(selected.id)}/jobs/${encodeURIComponent(event.data.jobId)}`);
       }
@@ -386,7 +424,34 @@ export default function CourseSpacePage() {
     </header>
     <div className="p-4">{selected && <div className="mx-auto max-w-[1760px] space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3 px-1"><div><h2 className="text-xl font-semibold">{selected.title}</h2><p className="text-xs text-muted-foreground">按课程—模块—课时浏览课件、知识点与教学文件</p></div><div className="flex items-center gap-2 text-xs"><span className="rounded-full border bg-white px-3 py-1.5">{selected.modules.length} 模块</span><span className="rounded-full border bg-white px-3 py-1.5">{artifacts.length} 产物</span>{latestJob && <Button variant="outline" size="sm" onClick={() => router.push(`/course-space/${selected.id}/jobs/${latestJob.id}`)}>最近任务</Button>}</div></div>
-      <CourseWorkspaceExplorer course={selected} artifacts={artifacts} onGenerate={(type, scope) => void requestGeneration(type, scope)} onCourseChange={saveStructure} onRefresh={() => refresh(selected.id)} onScopeChange={updateGenerationScope}/>
+      <CourseWorkspaceExplorer course={selected} artifacts={artifacts} height={courseAreaHeight} onGenerate={(type, scope) => void requestGeneration(type, scope)} onCourseChange={saveStructure} onRefresh={() => refresh(selected.id)} onScopeChange={updateGenerationScope}/>
+      <div
+        ref={verticalSplitRef}
+        role="separator"
+        aria-label="调整课件区与教师工作台高度"
+        aria-orientation="horizontal"
+        aria-valuemin={420}
+        aria-valuemax={1100}
+        aria-valuenow={courseAreaHeight}
+        tabIndex={0}
+        onPointerDown={startVerticalResize}
+        onKeyDown={(event) => {
+          if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+          event.preventDefault();
+          const delta = event.key === 'ArrowDown' ? 20 : -20;
+          const limited = Math.min(1100 - courseAreaHeight, workbenchHeight - 300, Math.max(420 - courseAreaHeight, delta));
+          const nextTop = courseAreaHeight + limited;
+          const nextBottom = workbenchHeight - limited;
+          setCourseAreaHeight(nextTop);
+          setWorkbenchHeight(nextBottom);
+          window.localStorage.setItem('mentra.course-area-height', String(nextTop));
+          window.localStorage.setItem('mentra.workbench-height', String(nextBottom));
+        }}
+        className="group relative -my-2 flex h-7 cursor-row-resize touch-none items-center justify-center outline-none"
+      >
+        <div className="h-1 w-24 rounded-full bg-slate-300 transition group-hover:bg-[#B00055] group-focus:bg-[#B00055]" />
+        <GripHorizontal className="absolute size-4 text-slate-400 opacity-0 transition group-hover:opacity-100 group-focus:opacity-100" />
+      </div>
       <section className="overflow-visible rounded-[26px] border border-white/80 bg-white/75 shadow-sm backdrop-blur-xl">
         <div className="flex items-center justify-between gap-3 border-b bg-white/85 px-4 py-3">
           <div className="inline-flex rounded-xl bg-slate-100 p-1" role="tablist" aria-label="教师工作区视图">
@@ -395,7 +460,7 @@ export default function CourseSpacePage() {
           </div>
           {workspacePanel === 'generate' ? <CourseWorkLocationPicker course={selected} scope={activeScope} onChange={updateGenerationScope}/> : <p className="text-xs text-muted-foreground">当前课程共 {artifacts.length} 个教学产物</p>}
         </div>
-        <div className="p-3">{workspacePanel === 'generate' ? <div className="overflow-hidden rounded-2xl border bg-white"><iframe ref={workbenchFrameRef} title="教师工作台备课命令与课件生成" src={`/?view=generate&embed=1&courseId=${encodeURIComponent(selected.id)}`} className="h-[500px] w-full border-0"/></div> : <CourseArtifactGallery courseId={selected.id} artifacts={artifacts} embedded/>}</div>
+        <div className="p-3">{workspacePanel === 'generate' ? <div className="overflow-hidden rounded-2xl border bg-white"><iframe ref={workbenchFrameRef} title="教师工作台备课命令与课件生成" src={`/?view=generate&embed=1&courseId=${encodeURIComponent(selected.id)}`} className="w-full border-0" style={{ height: workbenchHeight }}/></div> : <CourseArtifactGallery courseId={selected.id} artifacts={artifacts} embedded/>}</div>
       </section>
       {message && <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">{message}</div>}
     </div>}</div>

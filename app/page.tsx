@@ -861,14 +861,6 @@ function HomePage({ embedded = false, courseId, scope = 'course', location }: { 
     }
   };
 
-  const runLessonShortcut = (command: string) => {
-    if (!scope.startsWith('lesson:')) {
-      setError('请先在“当前工作位置”选择具体课时文件夹，再使用此快捷任务。');
-      return;
-    }
-    void sendTeacherCommand(command);
-  };
-
   const confirmTeacherPlan = async () => {
     if (!pendingTeacherPlan || teacherCommandBusy) return;
     setTeacherCommandBusy(true);
@@ -1084,25 +1076,30 @@ function HomePage({ embedded = false, courseId, scope = 'course', location }: { 
           transition={{ delay: 0.35 }}
           className="w-full"
         >
-          {embedded && <div className="mb-3 flex flex-wrap items-center gap-2" aria-label="备课快捷任务">
-            {[
-              ['课程目标', '请生成当前课时的课程目标具体内容'],
-              ['知识点', '请生成当前课时的知识点具体内容'],
-              ['教学活动', '请生成当前课时的教学活动具体内容'],
-            ].map(([label, command]) => <button key={label} type="button" disabled={teacherCommandBusy} onClick={() => runLessonShortcut(command)} className="rounded-full border border-[#B00055]/20 bg-white/85 px-3 py-1.5 text-xs font-medium text-[#B00055] hover:bg-[#B00055]/10 disabled:opacity-50">{label}</button>)}
-            <button type="button" disabled={teacherCommandBusy || !hasUsableProvider} onClick={() => void sendTeacherCommand(form.requirement.trim() || '请结合当前工作目录与课程材料生成一节 AI 增强课件。')} className="rounded-full border border-[#B00055]/20 bg-white/85 px-3 py-1.5 text-xs font-medium text-[#B00055] hover:bg-[#B00055]/10 disabled:opacity-50">课件</button>
-          </div>}
           <div className="w-full rounded-2xl border border-border/60 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl shadow-xl shadow-black/[0.03] dark:shadow-black/20 transition-shadow focus-within:border-[#B00055]/20 focus-within:shadow-2xl focus-within:shadow-[#B00055]/[0.07]">
+            {embedded && <div className="flex flex-wrap items-center gap-2 px-3 pt-3" aria-label="备课快捷任务">
+              <button type="button" disabled={teacherCommandBusy || !hasUsableProvider} onClick={() => void sendTeacherCommand(form.requirement.trim() || '请结合当前工作目录与课程材料生成一节 AI 增强课件。')} className="rounded-full border border-[#B00055]/20 bg-white/85 px-3 py-1.5 text-xs font-medium text-[#B00055] hover:bg-[#B00055]/10 disabled:opacity-50">课件生成</button>
+              <button type="button" onClick={() => window.parent.postMessage({ type: 'teacher-workbench-open-knowledge-graph', courseId }, window.location.origin)} className="rounded-full border border-[#B00055]/20 bg-white/85 px-3 py-1.5 text-xs font-medium text-[#B00055] hover:bg-[#B00055]/10">知识图谱</button>
+            </div>}
             {/* Textarea */}
-            <textarea
-              ref={textareaRef}
-              placeholder={embedded ? '输入备课命令，例如：生成当前课时的课程目标、知识点或教学活动；也可以要求生成课件…' : t('upload.requirementPlaceholder')}
-              className="w-full resize-none border-0 bg-transparent px-4 pt-4 pb-2 text-[13px] leading-relaxed placeholder:text-muted-foreground/40 focus:outline-none min-h-[156px] max-h-[300px]"
-              value={form.requirement}
-              onChange={(e) => updateForm('requirement', e.target.value)}
-              onKeyDown={handleKeyDown}
-              rows={4}
-            />
+            <div className="relative">
+              {embedded && !form.requirement.trim() && <div aria-hidden="true" className="pointer-events-none absolute left-4 top-4 space-y-1 text-[13px] leading-relaxed text-slate-400 dark:text-slate-500">
+                <p>输入备课命令，例如：</p>
+                <p>「生成第 2 周的课程目标、知识点和教学活动」</p>
+                <p>「根据当前课程材料生成一节 AI 增强课件」</p>
+                <p>「建立课程知识图谱并抽取知识点与课时关系」</p>
+              </div>}
+              <textarea
+                ref={textareaRef}
+                aria-label={embedded ? '备课命令' : undefined}
+                placeholder={embedded ? undefined : t('upload.requirementPlaceholder')}
+                className="w-full resize-none border-0 bg-transparent px-4 pt-4 pb-2 text-[13px] leading-relaxed placeholder:text-muted-foreground/60 focus:outline-none min-h-[156px] max-h-[300px]"
+                value={form.requirement}
+                onChange={(e) => updateForm('requirement', e.target.value)}
+                onKeyDown={handleKeyDown}
+                rows={4}
+              />
+            </div>
 
             {/* Toolbar row */}
             <div className="px-3 pb-3 flex items-end gap-2">
