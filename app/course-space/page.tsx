@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { nanoid } from 'nanoid';
 import { ArrowLeft, GripHorizontal, LayoutGrid } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -9,12 +9,13 @@ import { CoursewareModeDialog } from '@/components/generation/courseware-mode-di
 import { CourseWorkspaceExplorer } from '@/components/course-space/course-workspace-explorer';
 import { CourseArtifactGallery } from '@/components/course-space/course-artifact-gallery';
 import { CourseWorkLocationPicker } from '@/components/course-space/course-work-location-picker';
+import { TeacherWorkspaceAgent } from '@/components/course-space/teacher-workspace-agent';
+import { postSaasHostMessage } from '@/lib/integration/host-bridge';
 import { CourseCenter } from '@/components/course-space/course-center';
 import type { Slide } from '@openmaic/dsl';
 import type * as MaicImport from '@openmaic/importer';
 import type { PptContentDraft } from '@/lib/types/generation';
 import type { CoursewareConversionMode } from '@/lib/learning-skills/courseware-mode';
-import type { TeacherOperationPlan } from '@/lib/course-space/teacher-agent-intent';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useUserProfileStore } from '@/lib/store/user-profile';
 import { fingerprintCoursewareFile } from '@/lib/course-governance/fingerprint';
@@ -69,9 +70,10 @@ function buildLegacyPptDraft(extraction: CourseMaterialExtraction): PptContentDr
 
 export default function CourseSpacePage() {
   const router = useRouter();
+  const pathname = usePathname();
+  const isTeacherV11 = pathname.startsWith('/teacher-workspace');
   const repository = useMemo(() => new ApiCourseSpaceRepository(), []);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const workbenchFrameRef = useRef<HTMLIFrameElement>(null);
   const verticalSplitRef = useRef<HTMLDivElement>(null);
   const [courses, setCourses] = useState<CourseSpace[]>([]);
   const [selectedId, setSelectedId] = useState<string>();
@@ -91,6 +93,13 @@ export default function CourseSpacePage() {
   const [courseAreaHeight, setCourseAreaHeight] = useState(790);
   const [workbenchHeight, setWorkbenchHeight] = useState(500);
   const selected = courses.find((course) => course.id === selectedId);
+
+  useEffect(() => {
+    postSaasHostMessage('TEACHER_WORKSPACE_READY', {
+      capabilities: ['courseware-generation', 'knowledge-graph', 'artifact-review', 'classroom-player'],
+      courseId: selected?.id,
+    });
+  }, [selected?.id]);
 
   useEffect(() => {
     const savedTop = Number(window.localStorage.getItem('mentra.course-area-height'));
@@ -259,39 +268,18 @@ export default function CourseSpacePage() {
     : '';
 
   useEffect(() => {
-    if (workspacePanel !== 'generate' || !selected) return;
-    const frameWindow = workbenchFrameRef.current?.contentWindow;
-    frameWindow?.postMessage({ type: 'teacher-workbench-scope', courseId: selected.id, scope: activeScopeKey, location: workbenchLocation }, window.location.origin);
-    const handleReady = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin || event.source !== frameWindow || event.data?.type !== 'teacher-workbench-ready') return;
-      frameWindow?.postMessage({ type: 'teacher-workbench-scope', courseId: selected.id, scope: activeScopeKey, location: workbenchLocation }, window.location.origin);
-    };
-    window.addEventListener('message', handleReady);
-    return () => window.removeEventListener('message', handleReady);
-  }, [workspacePanel, selected?.id, activeScopeKey, workbenchLocation]);
-
-  useEffect(() => {
     if (!selected) return;
-    const handleCourseUpdate = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin || event.source !== workbenchFrameRef.current?.contentWindow) return;
-      if (event.data?.courseId !== selected.id) return;
-      if (event.data.type === 'teacher-workbench-course-updated') void refresh(selected.id);
-      if (event.data.type === 'teacher-workbench-open-preview') router.push('/generation-preview');
-      if (event.data.type === 'teacher-workbench-open-knowledge-graph') router.push(`/course-space/${encodeURIComponent(selected.id)}/knowledge-graph/manage`);
-      if (event.data.type === 'teacher-workbench-open-job' && typeof event.data.jobId === 'string') {
-        router.push(`/course-space/${encodeURIComponent(selected.id)}/jobs/${encodeURIComponent(event.data.jobId)}`);
-      }
-      if (event.data.type === 'teacher-workbench-open-plan') {
-        const plan = event.data.plan as TeacherOperationPlan | undefined;
-        if (plan?.action?.type !== 'create-lesson-files' || plan.action.lessonIds.length !== 1) return;
-        const draftId = nanoid(12);
-        sessionStorage.setItem(`teacher-plan:${draftId}`, JSON.stringify(plan));
-        router.push(`/course-space/${encodeURIComponent(selected.id)}/prepare?draft=${encodeURIComponent(draftId)}`);
-      }
-    };
-    window.addEventListener('message', handleCourseUpdate);
-    return () => window.removeEventListener('message', handleCourseUpdate);
-  }, [selected?.id, refresh, router]);
+    const scope = activeScopeKey.startsWith('module:')
+      ? { type: 'module' as const, moduleId: activeScopeKey.slice(7) }
+      : activeScopeKey.startsWith('lesson:')
+        ? { type: 'lesson' as const, lessonId: activeScopeKey.slice(7) }
+        : { type: 'course' as const };
+    postSaasHostMessage('WORK_SCOPE_CHANGED', {
+      courseId: selected.id,
+      scope,
+      displayPath: workbenchLocation,
+    });
+  }, [selected, activeScopeKey, workbenchLocation]);
 
   const launchCoursewareFlow = async (mode: CoursewareConversionMode) => {
     if (!selected || !selectedCoursewareMaterial) return;
@@ -419,12 +407,12 @@ export default function CourseSpacePage() {
 
   return <main className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_28%_8%,rgba(59,130,246,0.10),transparent_28%),radial-gradient(circle_at_72%_88%,rgba(176,0,85,0.08),transparent_30%),linear-gradient(to_bottom,#f8fafc,#f3f6fa)] text-slate-900">
     <header className="sticky top-0 z-30 flex items-center justify-between border-b border-white/70 bg-white/75 px-6 py-3 backdrop-blur-xl">
-      <div className="flex items-center gap-3"><Button variant="ghost" size="icon" className="rounded-full" onClick={() => router.push(`/course-space/${selected?.id || workspaceCourseId}`)}><ArrowLeft /></Button><img src="/mentra-icon.svg" alt="MENTRA" className="size-9"/><div className="h-7 w-px bg-slate-200"/><div><h1 className="text-lg font-semibold">教师课程工作区</h1><p className="text-xs text-muted-foreground">课程结构、智能体协作与历史教学产物</p></div></div>
+      <div className="flex items-center gap-3"><Button variant="ghost" size="icon" className="rounded-full" onClick={() => router.push(`/course-space/${selected?.id || workspaceCourseId}`)}><ArrowLeft /></Button><img src="/mentra-icon.svg" alt="MENTRA" className="size-9"/><div className="h-7 w-px bg-slate-200"/><div><div className="flex items-center gap-2"><h1 className="text-lg font-semibold">教师课程工作区</h1><span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${isTeacherV11 ? 'border-[#B00055]/20 bg-[#B00055]/5 text-[#B00055]' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>教师端 {isTeacherV11 ? 'v1.1' : 'v1.0'}</span></div><p className="text-xs text-muted-foreground">课程结构、智能体协作与历史教学产物</p></div></div>
       <div className="flex items-center gap-3"><Button variant="outline" className="rounded-full bg-white/70" onClick={() => router.push('/')}>返回品牌首页</Button><div className="rounded-full border bg-white/70 px-3 py-1.5 text-xs text-muted-foreground">默认教师</div></div>
     </header>
     <div className="p-4">{selected && <div className="mx-auto max-w-[1760px] space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3 px-1"><div><h2 className="text-xl font-semibold">{selected.title}</h2><p className="text-xs text-muted-foreground">按课程—模块—课时浏览课件、知识点与教学文件</p></div><div className="flex items-center gap-2 text-xs"><span className="rounded-full border bg-white px-3 py-1.5">{selected.modules.length} 模块</span><span className="rounded-full border bg-white px-3 py-1.5">{artifacts.length} 产物</span>{latestJob && <Button variant="outline" size="sm" onClick={() => router.push(`/course-space/${selected.id}/jobs/${latestJob.id}`)}>最近任务</Button>}</div></div>
-      <CourseWorkspaceExplorer course={selected} artifacts={artifacts} height={courseAreaHeight} onGenerate={(type, scope) => void requestGeneration(type, scope)} onCourseChange={saveStructure} onRefresh={() => refresh(selected.id)} onScopeChange={updateGenerationScope}/>
+      <CourseWorkspaceExplorer course={selected} artifacts={artifacts} height={courseAreaHeight} showOriginBadges={isTeacherV11} onGenerate={(type, scope) => void requestGeneration(type, scope)} onCourseChange={saveStructure} onRefresh={() => refresh(selected.id)} onScopeChange={updateGenerationScope}/>
       <div
         ref={verticalSplitRef}
         role="separator"
@@ -460,7 +448,7 @@ export default function CourseSpacePage() {
           </div>
           {workspacePanel === 'generate' ? <CourseWorkLocationPicker course={selected} scope={activeScope} onChange={updateGenerationScope}/> : <p className="text-xs text-muted-foreground">当前课程共 {artifacts.length} 个教学产物</p>}
         </div>
-        <div className="p-3">{workspacePanel === 'generate' ? <div className="overflow-hidden rounded-2xl border bg-white"><iframe ref={workbenchFrameRef} title="教师工作台备课命令与课件生成" src={`/?view=generate&embed=1&courseId=${encodeURIComponent(selected.id)}`} className="w-full border-0" style={{ height: workbenchHeight }}/></div> : <CourseArtifactGallery courseId={selected.id} artifacts={artifacts} embedded/>}</div>
+        <div className="p-3">{workspacePanel === 'generate' ? <div style={{ height: workbenchHeight }}><TeacherWorkspaceAgent course={selected} activeScope={activeScope} embedded onGenerate={(type, scope) => void requestGeneration(type, scope)} onOperationComplete={() => refresh(selected.id)} onOpenKnowledgeGraph={() => router.push(`/course-space/${encodeURIComponent(selected.id)}/knowledge-graph/manage`)}/></div> : <CourseArtifactGallery courseId={selected.id} artifacts={artifacts} embedded/>}</div>
       </section>
       {message && <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">{message}</div>}
     </div>}</div>

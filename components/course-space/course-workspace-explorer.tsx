@@ -14,6 +14,7 @@ import {
   Presentation,
   Sparkles,
   Trash2,
+  Upload,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type {
@@ -65,6 +66,31 @@ function belongsToScope(artifact: CourseArtifactRecord, scope: Scope, course: Co
   return artifact.scope.type === 'module' && artifact.scope.moduleId === courseModule?.id;
 }
 
+function OriginBadge({
+  origin,
+  className = '',
+}: {
+  origin: 'teacher' | 'agent';
+  className?: string;
+}) {
+  const isTeacher = origin === 'teacher';
+  const Icon = isTeacher ? Upload : Sparkles;
+
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[9px] font-medium leading-none ${
+        isTeacher
+          ? 'border-blue-200 bg-blue-50 text-blue-700'
+          : 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700'
+      } ${className}`}
+      title={isTeacher ? '教师上传的原始材料' : 'AI / 智能体生成的教学产物'}
+    >
+      <Icon className="size-2.5" />
+      {isTeacher ? '教师上传' : 'AI生成'}
+    </span>
+  );
+}
+
 export function CourseWorkspaceExplorer({
   course,
   artifacts,
@@ -72,6 +98,7 @@ export function CourseWorkspaceExplorer({
   onCourseChange,
   onRefresh,
   onScopeChange,
+  showOriginBadges = false,
   height = 790,
 }: {
   course: CourseSpace;
@@ -80,6 +107,7 @@ export function CourseWorkspaceExplorer({
   onCourseChange: (course: CourseSpace) => Promise<void>;
   onRefresh: () => Promise<void>;
   onScopeChange?: (scope: CourseArtifactJob['scope']) => void;
+  showOriginBadges?: boolean;
   height?: number;
 }) {
   const firstLesson = course.modules.flatMap((item) => item.lessons)[0];
@@ -422,6 +450,15 @@ export function CourseWorkspaceExplorer({
               </button>
             </div>
           </div>
+          {showOriginBadges && (
+            <div className="mb-3 rounded-xl border border-slate-200 bg-white px-2.5 py-2">
+              <p className="mb-1.5 text-[10px] font-medium text-slate-500">材料来源</p>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <OriginBadge origin="teacher" />
+                <OriginBadge origin="agent" />
+              </div>
+            </div>
+          )}
           <div className="mb-1 flex items-center gap-1">
             <button
               className="p-1 text-slate-400"
@@ -475,6 +512,7 @@ export function CourseWorkspaceExplorer({
                     <FileText className="size-3.5 shrink-0 text-blue-500" />
                   )}
                   <span className="truncate">{artifact.title}</span>
+                  {showOriginBadges && <OriginBadge origin="agent" className="ml-auto" />}
                 </button>
               ))}
             </div>
@@ -621,6 +659,7 @@ export function CourseWorkspaceExplorer({
                                   >
                                     <Presentation className="size-3.5 shrink-0 text-orange-500" />
                                     <span className="truncate">{material.name}</span>
+                                    {showOriginBadges && <OriginBadge origin="teacher" className="ml-auto" />}
                                   </button>
                                 ))}
                                 {structureFiles.map((file) => (
@@ -639,6 +678,7 @@ export function CourseWorkspaceExplorer({
                                   >
                                     <FileText className="size-3.5 shrink-0 text-blue-500" />
                                     <span className="truncate">{file.title}</span>
+                                    {showOriginBadges && <OriginBadge origin="agent" className="ml-auto" />}
                                   </button>
                                 ))}
                                 {artifactFiles.map((artifact) => (
@@ -661,6 +701,7 @@ export function CourseWorkspaceExplorer({
                                       <FileText className="size-3.5 shrink-0 text-blue-500" />
                                     )}
                                     <span className="truncate">{artifact.title}</span>
+                                    {showOriginBadges && <OriginBadge origin="agent" className="ml-auto" />}
                                   </button>
                                 ))}
                               </div>

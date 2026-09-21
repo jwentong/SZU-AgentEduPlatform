@@ -38,6 +38,7 @@ export function TeacherWorkspaceAgent({
   activeScope,
   onGenerate,
   onOperationComplete,
+  onOpenKnowledgeGraph,
   embedded = false,
   externalPrompt,
 }: {
@@ -45,6 +46,7 @@ export function TeacherWorkspaceAgent({
   activeScope: CourseArtifactJob['scope'];
   onGenerate: (type: CourseArtifactType, scope?: CourseArtifactJob['scope']) => void;
   onOperationComplete?: () => void | Promise<void>;
+  onOpenKnowledgeGraph?: () => void;
   embedded?: boolean;
   externalPrompt?: { id: number; text: string; attachments?: ScreenshotAttachment[] };
 }) {
@@ -65,6 +67,7 @@ export function TeacherWorkspaceAgent({
   const [attachments, setAttachments] = useState<ScreenshotAttachment[]>([]);
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState('DeepSeek Harness');
+  const conversationEndRef = useRef<HTMLDivElement>(null);
   const loadSessions = useCallback(async () => {
     const response = await fetch(`/api/course-space/${course.id}/agent?list=1`, { cache: 'no-store' });
     const data = await response.json() as { sessions?: SessionSummary[] };
@@ -134,6 +137,9 @@ export function TeacherWorkspaceAgent({
       active = false;
     };
   }, [course.id, initialMessage, sessionId]);
+  useEffect(() => {
+    conversationEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [messages, loading]);
   const send = async (preset?: string) => {
     const content = (preset ?? input).trim();
     if (!content || loading) return;
@@ -260,7 +266,7 @@ export function TeacherWorkspaceAgent({
     setAttachments([]);
   };
   return (
-    <div className="flex h-full min-h-[600px] flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white/90 shadow-sm backdrop-blur-xl">
+    <div className={`flex h-full flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white/90 shadow-sm backdrop-blur-xl ${embedded ? 'min-h-0' : 'min-h-[600px]'}`}>
       {!embedded && <div className="flex items-center justify-between border-b border-slate-100 bg-white/80 px-5 py-4">
         <div className="flex items-center gap-3">
           <div className="rounded-xl bg-gradient-to-br from-[#B00055]/15 to-[#B00055]/5 p-2.5 text-[#B00055]">
@@ -284,6 +290,9 @@ export function TeacherWorkspaceAgent({
           <span className="truncate text-[#8F0046]">{workingLocation}</span>
         </div>
         <div className="ml-auto flex items-center gap-1.5 text-slate-500">
+          <span className="mr-2 rounded-full border border-emerald-100 bg-emerald-50 px-2 py-1 text-[10px] font-medium text-emerald-700">
+            {mode}
+          </span>
           <ShieldCheck className="size-4 text-emerald-600" />
           可访问本课程全部 {accessibleFolderCount} 个文件夹
         </div>
@@ -386,18 +395,18 @@ export function TeacherWorkspaceAgent({
             正在形成操作计划或调用课程工具…
           </div>
         )}
+        <div ref={conversationEndRef} />
       </div>
-      {!embedded && <div className="border-t border-slate-100 bg-white/90 p-4">
+      <div className="border-t border-slate-100 bg-white/90 p-4">
         <div className="mb-3 flex flex-wrap gap-2">
-          {actions.map((item) => (
-            <button
-              key={item.type}
-              onClick={() => onGenerate(item.type)}
-              className="rounded-full border border-[#B00055]/20 bg-[#B00055]/5 px-3 py-1.5 text-xs text-[#B00055] hover:bg-[#B00055]/10"
-            >
-              {item.label}
-            </button>
-          ))}
+          {embedded ? (
+            <>
+              <button type="button" onClick={() => onGenerate('lesson-courseware', activeScope)} className="rounded-full border border-[#B00055]/20 bg-[#B00055]/5 px-3 py-1.5 text-xs font-medium text-[#B00055] hover:bg-[#B00055]/10">课件生成</button>
+              <button type="button" onClick={onOpenKnowledgeGraph} className="rounded-full border border-[#B00055]/20 bg-[#B00055]/5 px-3 py-1.5 text-xs font-medium text-[#B00055] hover:bg-[#B00055]/10">知识图谱</button>
+            </>
+          ) : actions.map((item) => (
+              <button key={item.type} onClick={() => onGenerate(item.type)} className="rounded-full border border-[#B00055]/20 bg-[#B00055]/5 px-3 py-1.5 text-xs text-[#B00055] hover:bg-[#B00055]/10">{item.label}</button>
+            ))}
         </div>
         {attachments.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-2">
@@ -496,7 +505,7 @@ export function TeacherWorkspaceAgent({
         <p className="mt-2 text-[11px] text-muted-foreground">
           麦克风开启后会边听边显示文字，再次点击停止 · 可上传或 Ctrl+V 粘贴截图 · Enter 发送
         </p>
-      </div>}
+      </div>
         </div>
       </div>
     </div>
