@@ -293,6 +293,7 @@ interface StageState {
 
   // Actions
   setStage: (stage: Stage) => void;
+  updateStage: (updates: Partial<Stage>) => void;
   setScenes: (scenes: Scene[]) => void;
   addScene: (scene: Scene) => void;
   insertSceneAfter: (anchorSceneId: string, scene: Scene) => void;
@@ -496,6 +497,13 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
       generationEpoch: s.generationEpoch + 1,
     }));
     markPendingChanges(stage.id, { kind: 'structure' }, { kind: 'stage' });
+  },
+
+  updateStage: (updates) => {
+    const stage = get().stage;
+    if (!stage) return;
+    set({ stage: { ...stage, ...updates, updatedAt: Date.now() } });
+    markPendingChanges(stage.id, { kind: 'stage' });
   },
 
   setScenes: (scenes) => {

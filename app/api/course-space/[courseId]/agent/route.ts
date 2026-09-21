@@ -91,6 +91,7 @@ export async function POST(
       history?: Array<{ role: 'user' | 'assistant'; content: string }>;
       attachments?: Array<{ name: string; mimeType: string; dataUrl: string }>;
       scope?: CourseArtifactJob['scope'];
+      deepInteraction?: boolean;
     };
     if (!body.message?.trim())
       return NextResponse.json({ success: false, error: '请输入问题' }, { status: 400 });
@@ -138,6 +139,7 @@ export async function POST(
       history: body.history,
       attachments,
       scope: body.scope,
+      deepInteraction: body.deepInteraction === true,
     });
     await storage.completeTeacherTurn(lease, result);
     return NextResponse.json({ success: true, ...result });

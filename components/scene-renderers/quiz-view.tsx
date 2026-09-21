@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { getCurrentModelConfig } from '@/lib/utils/model-config';
 import { createLogger } from '@/lib/logger';
+import { useStageStore } from '@/lib/store';
 
 const log = createLogger('QuizView');
 import type { QuizQuestion } from '@/lib/types/stage';
@@ -705,6 +706,8 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
   const [runtimeGate, setRuntimeGate] = useState<QuizRuntimeGate>({ status: 'loading' });
   const [hydrationVersion, setHydrationVersion] = useState(0);
   const [retrying, setRetrying] = useState(false);
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  const [remainingSeconds, setRemainingSeconds] = useState(60);
   const viewLifetimeRef = useRef<QuizViewLifetime | null>(null);
   viewLifetimeRef.current ??= createQuizViewLifetime();
   const viewLifetime = viewLifetimeRef.current;
@@ -746,19 +749,17 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
 
   const attemptId = isQuizRuntimeReady(runtimeGate) ? runtimeGate.attemptId : null;
 
+  useEffect(() => {
+    if (!attemptId || phase !== 'not_started') return;
+    setCurrentQuestionIndex(0);
+    setRemainingSeconds(60);
+    setPhase('answering');
+  }, [attemptId, phase]);
+
   const totalPoints = useMemo(
     () => questions.reduce((sum, q) => sum + (q.points ?? 1), 0),
     [questions],
   );
-
-  const allAnswered = useMemo(() => {
-    return questions.every((q) => {
-      const a = answers[q.id];
-      if (!a) return false;
-      if (Array.isArray(a)) return a.length > 0;
-      return (a as string).trim().length > 0;
-    });
-  }, [questions, answers]);
 
   const handleSetAnswer = useCallback(
     (questionId: string, value: string | string[]) => {
@@ -793,6 +794,31 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
     );
   }, [attemptId, answers, runtimeWriter, sceneId, stageId, viewLifetime]);
 
+  const advanceQuestion = useCallback(() => {
+    if (currentQuestionIndex < questions.length - 1) {
+      setCurrentQuestionIndex((index) => index + 1);
+      setRemainingSeconds(60);
+      return;
+    }
+    void handleSubmit();
+  }, [currentQuestionIndex, handleSubmit, questions.length]);
+
+  // Every question owns an independent one-minute decision window. Missing
+  // answers remain absent and are graded as zero; the final timeout submits
+  // the attempt automatically.
+  useEffect(() => {
+    if (phase !== 'answering') return;
+    const timer = window.setInterval(() => {
+      setRemainingSeconds((seconds) => {
+        if (seconds > 1) return seconds - 1;
+        window.clearInterval(timer);
+        window.setTimeout(advanceQuestion, 0);
+        return 0;
+      });
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [phase, currentQuestionIndex, advanceQuestion]);
+
   // When entering grading phase, grade choice questions locally + call API for short-answer
   useEffect(() => {
     if (phase !== 'grading') return;
@@ -805,9 +831,18 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
       // 2. Grade short-answer questions via AI API (parallel)
       const shortAnswerQs = questions.filter(isShortAnswer);
       const aiResults = await Promise.all(
-        shortAnswerQs.map((q) =>
-          gradeShortAnswerQuestion(q, (answers[q.id] as string) ?? '', locale),
-        ),
+        shortAnswerQs.map((q) => {
+          const answer = ((answers[q.id] as string) ?? '').trim();
+          if (!answer) {
+            return Promise.resolve({
+              questionId: q.id,
+              correct: false,
+              status: 'incorrect' as const,
+              earned: 0,
+            });
+          }
+          return gradeShortAnswerQuestion(q, answer, locale);
+        }),
       );
 
       if (cancelled) return;
@@ -842,6 +877,19 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
       cancelled = true;
     };
   }, [phase, questions, answers, locale, sceneId, stageId, attemptId, runtimeWriter]);
+
+  // Keep the report briefly visible, then continue the lesson without
+  // requiring a teacher click.
+  useEffect(() => {
+    if (phase !== 'reviewing') return;
+    const timer = window.setTimeout(() => {
+      const store = useStageStore.getState();
+      const index = store.scenes.findIndex((scene) => scene.id === sceneId);
+      const next = store.scenes[index + 1];
+      if (next) store.setCurrentSceneId(next.id);
+    }, 3000);
+    return () => window.clearTimeout(timer);
+  }, [phase, sceneId]);
 
   const handleRetry = useCallback(async () => {
     if (!attemptId || retrying) return;
@@ -915,7 +963,11 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
             <QuizCover
               questionCount={questions.length}
               totalPoints={totalPoints}
-              onStart={() => setPhase('answering')}
+              onStart={() => {
+                setCurrentQuestionIndex(0);
+                setRemainingSeconds(60);
+                setPhase('answering');
+              }}
             />
           </motion.div>
         )}
@@ -936,34 +988,34 @@ export function QuizView({ questions, sceneId, stageId }: QuizViewProps) {
                   {t('quiz.answering')}
                 </span>
                 <span className="text-xs text-gray-400 ml-1">
-                  {
-                    Object.keys(answers).filter((k) => {
-                      const a = answers[k];
-                      if (Array.isArray(a)) return a.length > 0;
-                      return typeof a === 'string' && a.trim().length > 0;
-                    }).length
-                  }{' '}
-                  / {questions.length}
+                  {currentQuestionIndex + 1} / {questions.length}
                 </span>
               </div>
-              <button
-                type="button"
-                onClick={() => void handleSubmit()}
-                disabled={!allAnswered}
-                className={cn(
-                  'px-4 py-1.5 rounded-lg text-xs font-medium transition-all',
-                  allAnswered
-                    ? 'bg-gradient-to-r from-violet-500 to-purple-500 text-white shadow-sm hover:shadow-md hover:shadow-violet-200/50 dark:hover:shadow-violet-900/50 active:scale-[0.97]'
-                    : 'bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 cursor-not-allowed',
-                )}
-              >
-                {t('quiz.submitAnswers')}
-              </button>
+              <div className="flex items-center gap-3">
+                <span
+                  className={cn(
+                    'rounded-full px-3 py-1 text-xs font-semibold tabular-nums',
+                    remainingSeconds <= 10
+                      ? 'bg-red-50 text-red-600 dark:bg-red-950/40 dark:text-red-300'
+                      : 'bg-violet-50 text-violet-600 dark:bg-violet-950/40 dark:text-violet-300',
+                  )}
+                >
+                  {remainingSeconds}s
+                </span>
+                <button
+                  type="button"
+                  onClick={advanceQuestion}
+                  className="rounded-lg bg-gradient-to-r from-violet-500 to-purple-500 px-4 py-1.5 text-xs font-medium text-white shadow-sm transition-all hover:shadow-md active:scale-[0.97]"
+                >
+                  {currentQuestionIndex < questions.length - 1 ? '下一题' : t('quiz.submitAnswers')}
+                </button>
+              </div>
             </div>
 
             {/* Questions */}
             <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-              {questions.map((q, i) => {
+              {questions.slice(currentQuestionIndex, currentQuestionIndex + 1).map((q) => {
+                const i = currentQuestionIndex;
                 if (q.type === 'single') {
                   return (
                     <SingleChoiceQuestion

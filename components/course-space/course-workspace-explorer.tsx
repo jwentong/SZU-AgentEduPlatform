@@ -15,6 +15,7 @@ import {
   Sparkles,
   Trash2,
   Upload,
+  Radio,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type {
@@ -129,6 +130,7 @@ export function CourseWorkspaceExplorer({
   const initializedFromArtifacts = useRef(false);
   const explorerRef = useRef<HTMLDivElement>(null);
   const [treeWidth, setTreeWidth] = useState(220);
+  const [activating, setActivating] = useState(false);
 
   useEffect(() => {
     const saved = Number(window.localStorage.getItem('mentra.course-tree-width'));
@@ -141,7 +143,14 @@ export function CourseWorkspaceExplorer({
     const startWidth = treeWidth;
     const move = (pointerEvent: PointerEvent) => {
       const containerWidth = explorerRef.current?.getBoundingClientRect().width ?? 1200;
-      setTreeWidth(Math.round(Math.min(Math.max(160, startWidth + pointerEvent.clientX - startX), Math.min(480, containerWidth * 0.46))));
+      setTreeWidth(
+        Math.round(
+          Math.min(
+            Math.max(160, startWidth + pointerEvent.clientX - startX),
+            Math.min(480, containerWidth * 0.46),
+          ),
+        ),
+      );
     };
     const stop = () => {
       window.removeEventListener('pointermove', move);
@@ -229,6 +238,40 @@ export function CourseWorkspaceExplorer({
     setScope(next);
     setSelectedFileId('');
     onScopeChange?.(next);
+  };
+  const toggleClassVisibility = async () => {
+    if (!selectedFile?.artifact && !selectedFile?.material) return;
+    const currentlyActive = Boolean(
+      selectedFile.artifact?.classVisible ?? selectedFile.material?.classVisible,
+    );
+    const url = selectedFile.artifact
+      ? `/api/course-space/${course.id}/artifacts/${selectedFile.artifact.id}`
+      : `/api/course-space/${course.id}/materials/${selectedFile.material!.id}`;
+    setActivating(true);
+    setTreeMessage('');
+    try {
+      const response = await fetch(url, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(
+          selectedFile.artifact
+            ? { action: currentlyActive ? 'deactivate' : 'activate' }
+            : { active: !currentlyActive },
+        ),
+      });
+      const result = (await response.json().catch(() => undefined)) as
+        | { error?: string }
+        | undefined;
+      if (!response.ok) throw new Error(result?.error || '班级资料状态更新失败');
+      await onRefresh();
+      setTreeMessage(
+        currentlyActive ? '已从班级资料中取消激活。' : '已激活，学生可在班级通道查看。',
+      );
+    } catch (error) {
+      setTreeMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setActivating(false);
+    }
   };
   const addModule = async () => {
     const title = window.prompt('请输入新模块名称');
@@ -373,9 +416,7 @@ export function CourseWorkspaceExplorer({
   };
   const deleteFolder = async (menu: FolderMenu) => {
     const isModule = menu.kind === 'module';
-    const courseModule = isModule
-      ? course.modules.find((item) => item.id === menu.id)
-      : undefined;
+    const courseModule = isModule ? course.modules.find((item) => item.id === menu.id) : undefined;
     const lesson = !isModule
       ? course.modules.flatMap((item) => item.lessons).find((item) => item.id === menu.id)
       : undefined;
@@ -399,10 +440,7 @@ export function CourseWorkspaceExplorer({
       setTreeMessage(`已删除“${menu.title}”。`);
     }
   };
-  const startDragging = (
-    event: React.DragEvent<HTMLElement>,
-    item: DragItem,
-  ) => {
+  const startDragging = (event: React.DragEvent<HTMLElement>, item: DragItem) => {
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('application/x-mentra-course-item', JSON.stringify(item));
   };
@@ -431,7 +469,11 @@ export function CourseWorkspaceExplorer({
     <div className="overflow-hidden rounded-[26px] border border-white/80 bg-white/90 shadow-[0_28px_80px_-42px_rgba(15,23,42,.45)] backdrop-blur-xl">
       {/* Course tree + the real OpenMAIC Pro workspace. The embedded classroom
         owns the per-page outline rail and narration/action timeline. */}
-      <div ref={explorerRef} className="grid min-h-0" style={{ height, gridTemplateColumns: `${treeWidth}px 8px minmax(0, 1fr)` }}>
+      <div
+        ref={explorerRef}
+        className="grid min-h-0"
+        style={{ height, gridTemplateColumns: `${treeWidth}px 8px minmax(0, 1fr)` }}
+      >
         <aside className="min-h-0 overflow-y-auto bg-[#faf8fb] p-3">
           <div className="mb-3 rounded-xl bg-[#B00055] px-3 py-3 text-white">
             <div className="flex items-center gap-2">
@@ -659,7 +701,9 @@ export function CourseWorkspaceExplorer({
                                   >
                                     <Presentation className="size-3.5 shrink-0 text-orange-500" />
                                     <span className="truncate">{material.name}</span>
-                                    {showOriginBadges && <OriginBadge origin="teacher" className="ml-auto" />}
+                                    {showOriginBadges && (
+                                      <OriginBadge origin="teacher" className="ml-auto" />
+                                    )}
                                   </button>
                                 ))}
                                 {structureFiles.map((file) => (
@@ -678,7 +722,9 @@ export function CourseWorkspaceExplorer({
                                   >
                                     <FileText className="size-3.5 shrink-0 text-blue-500" />
                                     <span className="truncate">{file.title}</span>
-                                    {showOriginBadges && <OriginBadge origin="agent" className="ml-auto" />}
+                                    {showOriginBadges && (
+                                      <OriginBadge origin="agent" className="ml-auto" />
+                                    )}
                                   </button>
                                 ))}
                                 {artifactFiles.map((artifact) => (
@@ -701,7 +747,9 @@ export function CourseWorkspaceExplorer({
                                       <FileText className="size-3.5 shrink-0 text-blue-500" />
                                     )}
                                     <span className="truncate">{artifact.title}</span>
-                                    {showOriginBadges && <OriginBadge origin="agent" className="ml-auto" />}
+                                    {showOriginBadges && (
+                                      <OriginBadge origin="agent" className="ml-auto" />
+                                    )}
                                   </button>
                                 ))}
                               </div>
@@ -750,7 +798,10 @@ export function CourseWorkspaceExplorer({
             if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
             event.preventDefault();
             setTreeWidth((width) => {
-              const next = Math.min(480, Math.max(160, width + (event.key === 'ArrowRight' ? 16 : -16)));
+              const next = Math.min(
+                480,
+                Math.max(160, width + (event.key === 'ArrowRight' ? 16 : -16)),
+              );
               window.localStorage.setItem('mentra.course-tree-width', String(next));
               return next;
             });
@@ -766,14 +817,38 @@ export function CourseWorkspaceExplorer({
                 {selectedFile?.title || '课程文件'}
               </p>
             </div>
-            {selectedFile?.artifact?.classroomUrl && (
-              <Button size="sm" variant="outline" asChild>
-                <a href={selectedFile.artifact.classroomUrl} target="_blank" rel="noreferrer">
-                  全屏打开
-                  <ExternalLink className="ml-1 size-3.5" />
-                </a>
-              </Button>
-            )}
+            <div className="flex items-center gap-2">
+              {(selectedFile?.artifact || selectedFile?.material) && (
+                <Button
+                  size="sm"
+                  variant={
+                    selectedFile.artifact?.classVisible || selectedFile.material?.classVisible
+                      ? 'default'
+                      : 'outline'
+                  }
+                  disabled={activating}
+                  onClick={() => void toggleClassVisibility()}
+                  className={
+                    selectedFile.artifact?.classVisible || selectedFile.material?.classVisible
+                      ? 'bg-emerald-600 hover:bg-emerald-700'
+                      : ''
+                  }
+                >
+                  <Radio className="mr-1 size-3.5" />
+                  {selectedFile.artifact?.classVisible || selectedFile.material?.classVisible
+                    ? '已激活'
+                    : '激活到班级'}
+                </Button>
+              )}
+              {selectedFile?.artifact?.classroomUrl && (
+                <Button size="sm" variant="outline" asChild>
+                  <a href={selectedFile.artifact.classroomUrl} target="_blank" rel="noreferrer">
+                    全屏打开
+                    <ExternalLink className="ml-1 size-3.5" />
+                  </a>
+                </Button>
+              )}
+            </div>
           </div>
           <div className="min-h-0 flex-1 p-2">
             {selectedFile?.artifact?.classroomUrl ? (

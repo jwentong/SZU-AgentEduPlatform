@@ -3,7 +3,15 @@
 import { useEffect, useState, Suspense, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'motion/react';
-import { CheckCircle2, Sparkles, AlertCircle, AlertTriangle, ArrowLeft, Bot } from 'lucide-react';
+import {
+  CheckCircle2,
+  Sparkles,
+  AlertCircle,
+  AlertTriangle,
+  ArrowLeft,
+  Bot,
+  Clock3,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -72,6 +80,10 @@ import {
   initializeCourseGovernance,
   recordAutomaticFallback,
 } from '@/lib/course-governance/governance';
+import {
+  getOutlineDurationSeconds,
+  inferTargetDurationMinutes,
+} from '@/lib/playback/timing-display';
 
 const log = createLogger('GenerationPreview');
 const OUTLINE_REVIEW_AUTO_CONTINUE_MS = 2500;
@@ -1101,6 +1113,12 @@ function GenerationPreviewContent() {
 
       // Store stage and outlines
       const store = useStageStore.getState();
+      stage.timing = {
+        targetDurationMinutes: inferTargetDurationMinutes(
+          currentSession.requirements.requirement,
+          outlines.length,
+        ),
+      };
       stage.videoManifest = buildVideoManifestFromOutlines(outlines);
       store.setStage(stage);
       store.setOutlines(outlines);
@@ -1213,6 +1231,22 @@ function GenerationPreviewContent() {
           firstScene = data.scene;
         }
       }
+
+      firstScene.timing = {
+        plannedDurationSec: getOutlineDurationSeconds(
+          firstOutline,
+          stage.timing.targetDurationMinutes ?? 45,
+          outlines.length,
+        ),
+        mode:
+          firstScene.type === 'quiz'
+            ? 'quiz'
+            : firstScene.type === 'interactive'
+              ? 'interactive-demo'
+              : 'narration-fit',
+        quizSecondsPerQuestion: firstScene.type === 'quiz' ? 60 : undefined,
+        autoAdvance: true,
+      };
 
       // Generate TTS for first scene (part of actions step — blocking)
       if (
@@ -1559,6 +1593,17 @@ function GenerationPreviewContent() {
       ? activeSteps[Math.min(currentStepIndex, activeSteps.length - 1)]
       : ALL_STEPS[0];
   const activeStepText = getGenerationStepText(activeStep, session);
+  const previewOutlines = session.sceneOutlines ?? streamingOutlines ?? [];
+  const previewTargetMinutes = inferTargetDurationMinutes(
+    session.requirements.requirement,
+    previewOutlines.length,
+  );
+  const durationBadge = (
+    <div className="absolute left-1/2 top-4 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-violet-200/70 bg-white/85 px-4 py-2 text-sm font-medium text-violet-700 shadow-sm backdrop-blur dark:border-violet-800 dark:bg-slate-900/85 dark:text-violet-300">
+      <Clock3 className="h-4 w-4" />
+      预计 {previewTargetMinutes} 分钟
+    </div>
+  );
 
   if (isReviewingOutlines) {
     const outlineStepIndex = Math.max(
@@ -1571,6 +1616,7 @@ function GenerationPreviewContent() {
 
     return (
       <div className="min-h-[100dvh] w-full bg-gradient-to-b from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900 flex flex-col items-center p-4 relative overflow-hidden">
+        {durationBadge}
         <motion.div
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -1632,6 +1678,7 @@ function GenerationPreviewContent() {
               isLoading={isConfirmingOutlines}
               isStreaming={isOutlineStreaming}
               onCollapse={session.conversionMode ? undefined : handleCollapseEditor}
+              targetDurationMinutes={previewTargetMinutes}
             />
           </motion.div>
         </div>
@@ -1641,6 +1688,7 @@ function GenerationPreviewContent() {
 
   return (
     <div className="min-h-[100dvh] w-full bg-gradient-to-b from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900 flex flex-col items-center justify-center p-4 relative overflow-hidden text-center">
+      {durationBadge}
       {/* Background Decor */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none z-0">
         <div

@@ -1,6 +1,10 @@
 import { type NextRequest, NextResponse } from 'next/server';
-import { apiError } from '@/lib/server/api-response';
-import { readCourseMaterialBytes, readServerCourse } from '@/lib/server/course-space-storage';
+import { apiError, apiSuccess } from '@/lib/server/api-response';
+import {
+  readCourseMaterialBytes,
+  readServerCourse,
+  updateServerCourse,
+} from '@/lib/server/course-space-storage';
 
 export async function GET(
   _req: NextRequest,
@@ -19,4 +23,32 @@ export async function GET(
       'cache-control': 'private, no-store',
     },
   });
+}
+
+export async function PATCH(
+  req: NextRequest,
+  context: { params: Promise<{ courseId: string; materialId: string }> },
+) {
+  const { courseId, materialId } = await context.params;
+  const course = await readServerCourse(courseId);
+  if (!course?.materials.some((item) => item.id === materialId)) {
+    return apiError('INVALID_REQUEST', 404, '课程材料不存在');
+  }
+  const body = (await req.json()) as { active?: boolean };
+  const active = body.active === true;
+  const now = Date.now();
+  const updated = await updateServerCourse(courseId, (current) => ({
+    ...current,
+    materials: current.materials.map((item) =>
+      item.id === materialId
+        ? {
+            ...item,
+            classVisible: active,
+            activatedAt: active ? now : undefined,
+            updatedAt: now,
+          }
+        : item,
+    ),
+  }));
+  return apiSuccess({ material: updated.materials.find((item) => item.id === materialId) });
 }

@@ -20,6 +20,7 @@ import { useStageStore, useCanvasStore } from '@/lib/store';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import type { SceneType, SlideContent, InteractiveContent } from '@/lib/types/stage';
 import { PENDING_SCENE_ID } from '@/lib/store/stage';
+import { formatPlaybackDuration, getSceneDurationSeconds } from '@/lib/playback/timing-display';
 
 interface SceneSidebarProps {
   readonly collapsed: boolean;
@@ -42,7 +43,7 @@ export function SceneSidebar({
 }: SceneSidebarProps) {
   const { t } = useI18n();
   const router = useRouter();
-  const { scenes, currentSceneId, setCurrentSceneId, generatingOutlines, generationStatus } =
+  const { stage, scenes, currentSceneId, setCurrentSceneId, generatingOutlines, generationStatus } =
     useStageStore();
   const failedOutlines = useStageStore.use.failedOutlines();
   const viewportSize = useCanvasStore.use.viewportSize();
@@ -152,6 +153,11 @@ export function SceneSidebar({
             const isInteractive = scene.type === 'interactive';
             const slideContent = isSlide ? (scene.content as SlideContent) : null;
             const interactiveContent = isInteractive ? (scene.content as InteractiveContent) : null;
+            const durationSeconds = getSceneDurationSeconds(scene, stage, scenes);
+            const durationLabel =
+              scene.type === 'quiz'
+                ? `${scene.content.questions.length} 题 · ${formatPlaybackDuration(durationSeconds)}`
+                : formatPlaybackDuration(durationSeconds);
 
             return (
               <div
@@ -330,6 +336,9 @@ export function SceneSidebar({
                         )}
                       />
                     )}
+                    <div className="absolute bottom-1.5 right-1.5 z-10 rounded-md bg-slate-950/75 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-white shadow-sm backdrop-blur-sm">
+                      {durationLabel}
+                    </div>
                   </div>
                 </div>
               </div>

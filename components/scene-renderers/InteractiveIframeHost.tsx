@@ -8,6 +8,7 @@ import {
   type IframePoolEntry,
 } from '@/lib/store/interactive-iframe-pool';
 import { useSceneRuntimeErrors } from '@/lib/store/scene-runtime-errors';
+import { useStageStore } from '@/lib/store';
 
 /**
  * Stable host for interactive scene iframes (#619).
@@ -100,6 +101,12 @@ interface PooledIframeProps {
 function PooledIframe({ sceneId, entry, visible }: PooledIframeProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const registerIframe = useWidgetIframeStore((s) => s.registerIframe);
+  const automaticDemo = useStageStore(
+    (state) =>
+      state.mode !== 'edit' &&
+      state.currentSceneId === sceneId &&
+      state.scenes.find((scene) => scene.id === sceneId)?.type === 'interactive',
+  );
 
   // Register the postMessage callback for this scene (moved here from the
   // placeholder, since the iframe now lives in the host). Stable per scene:
@@ -161,7 +168,7 @@ function PooledIframe({ sceneId, entry, visible }: PooledIframeProps) {
     zIndex: 1,
     // visibility (not display) — display:none can drop the document on re-show.
     visibility: shown ? 'visible' : 'hidden',
-    pointerEvents: shown ? 'auto' : 'none',
+    pointerEvents: shown && !automaticDemo ? 'auto' : 'none',
   };
 
   return (

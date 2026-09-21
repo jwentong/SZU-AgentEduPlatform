@@ -16,10 +16,7 @@ import type { AgentInfo } from '@openmaic/generation';
 import type { Scene } from '@/lib/types/stage';
 import type { Slide } from '@openmaic/dsl';
 import type { SpeechAction } from '@/lib/types/action';
-import {
-  filterUnspeakableSpeechActions,
-  splitLongSpeechActions,
-} from '@/lib/audio/tts-utils';
+import { filterUnspeakableSpeechActions, splitLongSpeechActions } from '@/lib/audio/tts-utils';
 import { measureAudioDuration } from '@/lib/audio/audio-duration';
 import { isTTSProviderEnabled } from '@/lib/audio/provider-enablement';
 import { resolveAgentVoiceOptions, pickNarratorAgent } from '@/lib/audio/agent-voice';
@@ -40,6 +37,7 @@ import {
   createAutomaticFallbackScene,
   recordAutomaticFallback,
 } from '@/lib/course-governance/governance';
+import { getOutlineDurationSeconds } from '@/lib/playback/timing-display';
 
 const log = createLogger('SceneGenerator');
 
@@ -805,6 +803,21 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
           if (actionsResult.success && actionsResult.scene) {
             const scene = actionsResult.scene;
             const settings = useSettingsStore.getState();
+            scene.timing = {
+              plannedDurationSec: getOutlineDurationSeconds(
+                outline,
+                stage.timing?.targetDurationMinutes ?? 45,
+                outlines.length,
+              ),
+              mode:
+                scene.type === 'quiz'
+                  ? 'quiz'
+                  : scene.type === 'interactive'
+                    ? 'interactive-demo'
+                    : 'narration-fit',
+              quizSecondsPerQuestion: scene.type === 'quiz' ? 60 : undefined,
+              autoAdvance: true,
+            };
 
             // TTS generation — failure means the whole scene fails
             if (
@@ -984,29 +997,30 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
       try {
         // Step 1: Content
         const importedSlide = params.importedSlides?.[outline.order - 1];
-        const contentResult: SceneContentResult = params.preferImportedCanvas && importedSlide
-          ? {
-              success: true,
-              content: { type: 'slide', canvas: importedSlide },
-              effectiveOutline: outline,
-            }
-          : await fetchSceneContent(
-              {
-                outline,
-                allOutlines: state.outlines,
-                stageId: state.stage.id,
-                pdfImages: params.pdfImages,
-                imageMapping: params.imageMapping,
-                stageInfo: params.stageInfo,
-                agents: params.agents,
-                languageDirective: params.languageDirective,
-                preferServerModel: params.preferServerModel,
-              },
-              signal,
-            );
+        const contentResult: SceneContentResult =
+          params.preferImportedCanvas && importedSlide
+            ? {
+                success: true,
+                content: { type: 'slide', canvas: importedSlide },
+                effectiveOutline: outline,
+              }
+            : await fetchSceneContent(
+                {
+                  outline,
+                  allOutlines: state.outlines,
+                  stageId: state.stage.id,
+                  pdfImages: params.pdfImages,
+                  imageMapping: params.imageMapping,
+                  stageInfo: params.stageInfo,
+                  agents: params.agents,
+                  languageDirective: params.languageDirective,
+                  preferServerModel: params.preferServerModel,
+                },
+                signal,
+              );
 
         if (!contentResult.success || !contentResult.content) {
-                if (governanceEnabled && params.preferImportedCanvas) {
+          if (governanceEnabled && params.preferImportedCanvas) {
             await applyRetryFallback(
               'content-generation-failure',
               contentResult.error || 'Content generation failed',

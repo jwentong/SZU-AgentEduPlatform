@@ -91,6 +91,20 @@ export interface CourseMaterialRecord {
   extractedAt?: number;
   createdAt: number;
   updatedAt: number;
+  /** Explicit teacher-controlled visibility in the teaching class. */
+  classVisible?: boolean;
+  activatedAt?: number;
+}
+
+export interface CourseStudentLearningState {
+  studentId: string;
+  name: string;
+  studentNumber?: string;
+  className?: string;
+  status: 'not-started' | 'learning' | 'completed' | 'needs-attention';
+  progress: number;
+  completedResourceIds: string[];
+  lastActiveAt?: number;
 }
 
 export interface CourseSpace {
@@ -112,6 +126,7 @@ export interface CourseSpace {
     lessonDurationMinutes?: number;
     baselineVersion?: number;
   };
+  classStudents?: CourseStudentLearningState[];
   createdAt: number;
   updatedAt: number;
 }
@@ -276,6 +291,9 @@ export interface CourseArtifactRecord {
   approvedAt?: number;
   createdAt: number;
   updatedAt: number;
+  /** Explicit teacher-controlled visibility in the teaching class. */
+  classVisible?: boolean;
+  activatedAt?: number;
 }
 
 export interface PublishedKnowledgeCitation {

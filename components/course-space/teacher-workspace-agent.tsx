@@ -3,20 +3,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
+  Brain,
   CheckCircle2,
   Circle,
   FolderOpen,
+  Globe2,
   ImagePlus,
   LoaderCircle,
   MessageSquare,
   MessageSquarePlus,
   Play,
+  Presentation,
   Send,
   ShieldCheck,
   X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { SpeechButton } from '@/components/audio/speech-button';
+import { InteractiveModeButton } from '@/components/generation/interactive-mode-button';
 import type { CourseArtifactJob, CourseArtifactType, CourseSpace } from '@/lib/course-space';
 import type { TeacherOperationPlan } from '@/lib/course-space/teacher-agent-intent';
 
@@ -67,6 +71,7 @@ export function TeacherWorkspaceAgent({
   const [attachments, setAttachments] = useState<ScreenshotAttachment[]>([]);
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState('DeepSeek Harness');
+  const [deepInteraction, setDeepInteraction] = useState(false);
   const conversationEndRef = useRef<HTMLDivElement>(null);
   const loadSessions = useCallback(async () => {
     const response = await fetch(`/api/course-space/${course.id}/agent?list=1`, { cache: 'no-store' });
@@ -157,6 +162,7 @@ export function TeacherWorkspaceAgent({
           history: messages,
           attachments: externalPrompt?.attachments ?? attachments,
           scope: activeScope,
+          deepInteraction,
         }),
       });
       const data = await response.json();
@@ -398,16 +404,11 @@ export function TeacherWorkspaceAgent({
         <div ref={conversationEndRef} />
       </div>
       <div className="border-t border-slate-100 bg-white/90 p-4">
-        <div className="mb-3 flex flex-wrap gap-2">
-          {embedded ? (
-            <>
-              <button type="button" onClick={() => onGenerate('lesson-courseware', activeScope)} className="rounded-full border border-[#B00055]/20 bg-[#B00055]/5 px-3 py-1.5 text-xs font-medium text-[#B00055] hover:bg-[#B00055]/10">课件生成</button>
-              <button type="button" onClick={onOpenKnowledgeGraph} className="rounded-full border border-[#B00055]/20 bg-[#B00055]/5 px-3 py-1.5 text-xs font-medium text-[#B00055] hover:bg-[#B00055]/10">知识图谱</button>
-            </>
-          ) : actions.map((item) => (
+        {!embedded && <div className="mb-3 flex flex-wrap gap-2">
+          {actions.map((item) => (
               <button key={item.type} onClick={() => onGenerate(item.type)} className="rounded-full border border-[#B00055]/20 bg-[#B00055]/5 px-3 py-1.5 text-xs text-[#B00055] hover:bg-[#B00055]/10">{item.label}</button>
             ))}
-        </div>
+        </div>}
         {attachments.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-2">
             {attachments.map((attachment, index) => (
@@ -434,23 +435,7 @@ export function TeacherWorkspaceAgent({
             ))}
           </div>
         )}
-        <div className="flex items-end gap-2 rounded-2xl border bg-slate-50/80 p-2 focus-within:border-[#B00055]/30 focus-within:ring-2 focus-within:ring-[#B00055]/10">
-          <label
-            className="grid size-10 shrink-0 cursor-pointer place-items-center rounded-xl text-slate-500 hover:bg-white hover:text-[#B00055]"
-            title="上传截图"
-          >
-            <ImagePlus className="size-4" />
-            <input
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              multiple
-              className="sr-only"
-              onChange={(event) => {
-                addImageFiles(Array.from(event.target.files ?? []));
-                event.target.value = '';
-              }}
-            />
-          </label>
+        <div className="overflow-hidden rounded-2xl border border-[#B00055]/20 bg-slate-50/75 shadow-sm transition focus-within:border-[#B00055]/40 focus-within:ring-2 focus-within:ring-[#B00055]/10">
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -469,38 +454,36 @@ export function TeacherWorkspaceAgent({
                 void send();
               }
             }}
-            className="min-h-16 flex-1 resize-none bg-transparent px-2 py-1 text-sm outline-none"
+            className="min-h-24 w-full resize-none bg-transparent px-4 pb-2 pt-4 text-sm leading-6 outline-none"
             placeholder="例如：把第一周内容移到第二周、删除空课时文件夹，或生成本周课件…"
           />
-          <SpeechButton
-            size="md"
-            disabled={loading}
-            continuous
-            onInterimTranscription={(text) =>
-              setInput((current) => {
-                if (voiceInputBaseRef.current === null) voiceInputBaseRef.current = current;
-                const base = voiceInputBaseRef.current;
-                return `${base}${base.trim() ? ' ' : ''}${text}`;
-              })
-            }
-            onTranscription={(text) =>
-              setInput((current) => {
-                const base = voiceInputBaseRef.current;
-                voiceInputBaseRef.current = null;
-                const stableBase = base ?? current;
-                return `${stableBase}${stableBase.trim() ? ' ' : ''}${text}`;
-              })
-            }
-            className="size-10 rounded-xl hover:bg-white hover:text-[#B00055]"
-          />
-          <Button
-            size="icon"
-            className="size-10 shrink-0 rounded-xl"
-            disabled={loading || !input.trim()}
-            onClick={() => void send()}
-          >
-            <Send className="size-4" />
-          </Button>
+          <div className="flex flex-wrap items-center gap-2 px-3 pb-3">
+            <button type="button" className="inline-flex h-8 items-center gap-1.5 rounded-full border border-violet-200 bg-violet-50 px-2.5 text-xs font-medium text-violet-700" title="使用高强度推理">
+              <Brain className="size-3.5" />
+              high
+            </button>
+            <span className="h-4 w-px bg-slate-200" />
+            <label className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-full border border-slate-200 bg-white text-slate-500 hover:border-[#B00055]/30 hover:text-[#B00055]" title="上传或粘贴截图">
+              <ImagePlus className="size-3.5" />
+              <input type="file" accept="image/png,image/jpeg,image/webp" multiple className="sr-only" onChange={(event) => { addImageFiles(Array.from(event.target.files ?? [])); event.target.value = ''; }}/>
+            </label>
+            <button type="button" className="grid size-8 place-items-center rounded-full border border-slate-200 bg-white text-slate-400" title="课程材料与已解析网页上下文">
+              <Globe2 className="size-3.5" />
+            </button>
+            <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+              <button type="button" onClick={() => onGenerate('lesson-courseware', activeScope)} className="inline-flex h-8 items-center gap-1.5 rounded-full border border-[#B00055]/25 bg-[#B00055]/5 px-3 text-xs font-medium text-[#B00055] hover:bg-[#B00055]/10">
+                <Presentation className="size-3.5" />讲师 PPT
+              </button>
+              <button type="button" onClick={onOpenKnowledgeGraph} className="inline-flex h-8 items-center gap-1.5 rounded-full border border-[#B00055]/25 bg-[#B00055]/5 px-3 text-xs font-medium text-[#B00055] hover:bg-[#B00055]/10">
+                <Brain className="size-3.5" />知识图谱
+              </button>
+              <InteractiveModeButton pressed={deepInteraction} label="深度交互" onPressedChange={setDeepInteraction} />
+              <SpeechButton size="md" disabled={loading} continuous onInterimTranscription={(text) => setInput((current) => { if (voiceInputBaseRef.current === null) voiceInputBaseRef.current = current; const base = voiceInputBaseRef.current; return `${base}${base.trim() ? ' ' : ''}${text}`; })} onTranscription={(text) => setInput((current) => { const base = voiceInputBaseRef.current; voiceInputBaseRef.current = null; const stableBase = base ?? current; return `${stableBase}${stableBase.trim() ? ' ' : ''}${text}`; })} className="size-8 rounded-full hover:bg-white hover:text-[#B00055]" />
+              <Button size="icon" className="size-9 shrink-0 rounded-full" disabled={loading || !input.trim()} onClick={() => void send()} title="发送消息">
+                <Send className="size-4" />
+              </Button>
+            </div>
+          </div>
         </div>
         <p className="mt-2 text-[11px] text-muted-foreground">
           麦克风开启后会边听边显示文字，再次点击停止 · 可上传或 Ctrl+V 粘贴截图 · Enter 发送

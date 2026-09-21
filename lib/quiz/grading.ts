@@ -41,7 +41,9 @@ export function gradeChoiceQuestions(
       const pts = q.points ?? 1;
       const userAnswer = toArray(answers[q.id]);
       const correctAnswer = toArray(q.answer);
-      const correct = arraysEqual(userAnswer, correctAnswer);
+      // An unanswered question is always zero points, even when malformed
+      // source content is also missing an answer key.
+      const correct = userAnswer.length > 0 && arraysEqual(userAnswer, correctAnswer);
       return {
         questionId: q.id,
         correct,

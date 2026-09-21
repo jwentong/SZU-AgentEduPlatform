@@ -23,14 +23,24 @@ export async function PATCH(
   if (!course || !artifact || artifact.courseId !== courseId) {
     return apiError('INVALID_REQUEST', 404, '待审核产物不存在');
   }
-  if (artifact.status === 'published') {
-    return apiError('INVALID_REQUEST', 409, '已发布产物不可直接修改，请重新生成版本');
-  }
   const body = (await req.json()) as {
     content?: string;
     reviewerNote?: string;
-    action?: 'save' | 'approve';
+    action?: 'save' | 'approve' | 'activate' | 'deactivate';
   };
+  if (body.action === 'activate' || body.action === 'deactivate') {
+    const active = body.action === 'activate';
+    const updated = await saveCourseArtifact({
+      ...artifact,
+      classVisible: active,
+      activatedAt: active ? Date.now() : undefined,
+      updatedAt: Date.now(),
+    });
+    return apiSuccess({ artifact: updated });
+  }
+  if (artifact.status === 'published') {
+    return apiError('INVALID_REQUEST', 409, '已发布产物不可直接修改，请重新生成版本');
+  }
   const content = body.content?.trim() ?? artifact.content;
   if (!content) return apiError('INVALID_REQUEST', 400, '审核内容不能为空');
   const approving = body.action === 'approve';
@@ -47,7 +57,8 @@ export async function PATCH(
     updatedAt: Date.now(),
   };
   if (WORD_ARTIFACT_TYPES.has(nextArtifact.type)) {
-    const wordFileName = nextArtifact.wordFileName || `${nextArtifact.title.replace(/[\\/:*?"<>|]/g, '_')}.docx`;
+    const wordFileName =
+      nextArtifact.wordFileName || `${nextArtifact.title.replace(/[\\/:*?"<>|]/g, '_')}.docx`;
     nextArtifact.wordFileName = wordFileName;
     nextArtifact.wordStorageKey = await saveCourseArtifactFile(
       nextArtifact.id,

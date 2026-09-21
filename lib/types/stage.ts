@@ -12,6 +12,7 @@
 import type {
   InteractiveContent as DslInteractiveContent,
   PBLContent as DslPBLContent,
+  Stage as DslStage,
   Scene as DslScene,
   SceneContent as DslSceneContent,
 } from '@openmaic/dsl';
@@ -28,12 +29,24 @@ export type {
   VideoManifest,
   GeneratedAgentConfig,
   MultiAgentConfig,
-  Stage,
   SlideContent,
   QuizOption,
   QuizQuestion,
   QuizContent,
 } from '@openmaic/dsl';
+
+export interface StageTiming {
+  targetDurationMinutes?: number;
+}
+
+export type Stage = DslStage & { timing?: StageTiming };
+
+export interface SceneTiming {
+  plannedDurationSec?: number;
+  mode?: 'narration-fit' | 'fixed' | 'interactive-demo' | 'quiz';
+  quizSecondsPerQuestion?: number;
+  autoAdvance?: boolean;
+}
 
 // The two discriminant guards are runtime functions, so they must be value
 // re-exported — a bare `export type {}` erases them and leaves the import as
@@ -97,6 +110,7 @@ export type SceneContent = AppSceneContent;
  * all four kinds).
  */
 export type AppScene = DslScene<Action, SceneContent> & {
+  timing?: SceneTiming;
   /**
    * Stable id of the generation outline this scene was built from. Lets editor
    * agent tools resolve a scene's outline by identity instead of by the mutable

@@ -27,6 +27,7 @@ import {
   X,
   Presentation,
   LibraryBig,
+  GraduationCap,
 } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { LanguageSwitcher } from '@/components/language-switcher';
@@ -124,7 +125,17 @@ const initialFormState: FormState = {
   vocationalTestMode: false,
 };
 
-function HomePage({ embedded = false, courseId, scope = 'course', location }: { embedded?: boolean; courseId?: string; scope?: string; location?: string }) {
+function HomePage({
+  embedded = false,
+  courseId,
+  scope = 'course',
+  location,
+}: {
+  embedded?: boolean;
+  courseId?: string;
+  scope?: string;
+  location?: string;
+}) {
   const { t } = useI18n();
   const { theme, setTheme } = useTheme();
   const router = useRouter();
@@ -193,7 +204,9 @@ function HomePage({ embedded = false, courseId, scope = 'course', location }: { 
   const [teacherCommandBusy, setTeacherCommandBusy] = useState(false);
   const [teacherCommandResult, setTeacherCommandResult] = useState<string | null>(null);
   const [pendingTeacherPlan, setPendingTeacherPlan] = useState<TeacherOperationPlan | null>(null);
-  const [pendingCoursewareInstruction, setPendingCoursewareInstruction] = useState<string | null>(null);
+  const [pendingCoursewareInstruction, setPendingCoursewareInstruction] = useState<string | null>(
+    null,
+  );
   const teacherSessionId = useRef(`teacher-workbench-${nanoid()}`);
   const [classrooms, setClassrooms] = useState<StageListItem[]>([]);
   const [thumbnails, setThumbnails] = useState<Record<string, Slide>>({});
@@ -355,7 +368,11 @@ function HomePage({ embedded = false, courseId, scope = 'course', location }: { 
           ? '已进入高保真路径，请先审核页面内容'
           : '已启用 Learning Skills，请先审核原 PPT 内容',
       );
-      if (embedded && courseId) window.parent.postMessage({ type: 'teacher-workbench-open-preview', courseId }, window.location.origin);
+      if (embedded && courseId)
+        window.parent.postMessage(
+          { type: 'teacher-workbench-open-preview', courseId },
+          window.location.origin,
+        );
       else router.push('/generation-preview');
     } catch (error) {
       await removeImportedPptSlides(pptxImportStorageKey).catch(() => undefined);
@@ -588,7 +605,10 @@ function HomePage({ embedded = false, courseId, scope = 'course', location }: { 
     }));
   };
 
-  const handleGenerate = async (modeOverride?: CoursewareConversionMode, instructionOverride?: string) => {
+  const handleGenerate = async (
+    modeOverride?: CoursewareConversionMode,
+    instructionOverride?: string,
+  ) => {
     // No model/provider guard here: generation is gated by `canGenerate`
     // (requires a usable provider), and under the #580 invariant a usable
     // provider always has a concrete model. State A (no usable provider)
@@ -607,7 +627,11 @@ function HomePage({ embedded = false, courseId, scope = 'course', location }: { 
       setError('请先配置可用的模型服务，再生成课件。');
       return;
     }
-    if (!instructionOverride?.trim() && !form.requirement.trim() && form.courseMaterials.length === 0) {
+    if (
+      !instructionOverride?.trim() &&
+      !form.requirement.trim() &&
+      form.courseMaterials.length === 0
+    ) {
       setError(t('upload.requirementRequired'));
       return;
     }
@@ -624,10 +648,13 @@ function HomePage({ embedded = false, courseId, scope = 'course', location }: { 
           ? 'pdf'
           : 'document';
       const baseRequirement =
-        instructionOverride?.trim() || form.requirement.trim() || '请根据教师上传的教学材料生成可自动播放的课堂课件。';
-      const scopedRequirement = embedded && location
-        ? `${baseRequirement}\n\n当前课程工作目录：${location}。请围绕此目录对应的教学范围生成内容。`
-        : baseRequirement;
+        instructionOverride?.trim() ||
+        form.requirement.trim() ||
+        '请根据教师上传的教学材料生成可自动播放的课堂课件。';
+      const scopedRequirement =
+        embedded && location
+          ? `${baseRequirement}\n\n当前课程工作目录：${location}。请围绕此目录对应的教学范围生成内容。`
+          : baseRequirement;
       const effectiveRequirement = conversionMode
         ? conversionMode === 'learning-skills-enhanced'
           ? buildLearningSkillsEnhancementRequirement(scopedRequirement, sourceKind)
@@ -723,17 +750,24 @@ function HomePage({ embedded = false, courseId, scope = 'course', location }: { 
           : undefined,
         conversionMode: conversionMode || undefined,
         sourceFingerprint,
-        courseSpaceContext: embedded && courseId ? {
-          courseId,
-          scope: scope.startsWith('module:')
-            ? { type: 'module' as const, moduleId: scope.slice(7) }
-            : scope.startsWith('lesson:')
-              ? { type: 'lesson' as const, lessonId: scope.slice(7) }
-              : { type: 'course' as const },
-        } : undefined,
+        courseSpaceContext:
+          embedded && courseId
+            ? {
+                courseId,
+                scope: scope.startsWith('module:')
+                  ? { type: 'module' as const, moduleId: scope.slice(7) }
+                  : scope.startsWith('lesson:')
+                    ? { type: 'lesson' as const, lessonId: scope.slice(7) }
+                    : { type: 'course' as const },
+              }
+            : undefined,
       };
       sessionStorage.setItem('generationSession', JSON.stringify(sessionState));
-      if (embedded && courseId) window.parent.postMessage({ type: 'teacher-workbench-open-preview', courseId }, window.location.origin);
+      if (embedded && courseId)
+        window.parent.postMessage(
+          { type: 'teacher-workbench-open-preview', courseId },
+          window.location.origin,
+        );
       else router.push('/generation-preview');
     } catch (err) {
       log.error('Error preparing generation:', err);
@@ -774,19 +808,23 @@ function HomePage({ embedded = false, courseId, scope = 'course', location }: { 
 
   const canGenerate =
     (!!form.requirement.trim() || form.courseMaterials.length > 0) && hasUsableProvider;
-  const commandScope = () => scope.startsWith('module:')
-    ? { type: 'module' as const, moduleId: scope.slice(7) }
-    : scope.startsWith('lesson:')
-      ? { type: 'lesson' as const, lessonId: scope.slice(7) }
-      : { type: 'course' as const };
+  const commandScope = () =>
+    scope.startsWith('module:')
+      ? { type: 'module' as const, moduleId: scope.slice(7) }
+      : scope.startsWith('lesson:')
+        ? { type: 'lesson' as const, lessonId: scope.slice(7) }
+        : { type: 'course' as const };
 
   const executeTeacherPlan = async (plan: TeacherOperationPlan) => {
     if (!courseId) return;
-    const response = await fetch(`/api/course-space/${encodeURIComponent(courseId)}/agent/operations`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ plan }),
-    });
+    const response = await fetch(
+      `/api/course-space/${encodeURIComponent(courseId)}/agent/operations`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ plan }),
+      },
+    );
     const data = await response.json();
     if (!response.ok || data.success === false) throw new Error(data.error || '执行备课任务失败');
     if (data.dispatch === 'artifact-workflow') {
@@ -799,17 +837,27 @@ function HomePage({ embedded = false, courseId, scope = 'course', location }: { 
       const jobResponse = await fetch(`/api/course-space/${encodeURIComponent(courseId)}/jobs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ artifactTypes: [action.artifactType], scope: action.scope || commandScope() }),
+        body: JSON.stringify({
+          artifactTypes: [action.artifactType],
+          scope: action.scope || commandScope(),
+        }),
       });
       const jobData = await jobResponse.json();
-      if (!jobResponse.ok || jobData.success === false) throw new Error(jobData.error || '创建教学产物任务失败');
+      if (!jobResponse.ok || jobData.success === false)
+        throw new Error(jobData.error || '创建教学产物任务失败');
       const jobId = jobData.jobs?.[0]?.id;
-      window.parent.postMessage(jobId
-        ? { type: 'teacher-workbench-open-job', courseId, jobId }
-        : { type: 'teacher-workbench-course-updated', courseId }, window.location.origin);
+      window.parent.postMessage(
+        jobId
+          ? { type: 'teacher-workbench-open-job', courseId, jobId }
+          : { type: 'teacher-workbench-course-updated', courseId },
+        window.location.origin,
+      );
       return '教学产物任务已创建，正在打开生成与审核页面。';
     }
-    window.parent.postMessage({ type: 'teacher-workbench-course-updated', courseId }, window.location.origin);
+    window.parent.postMessage(
+      { type: 'teacher-workbench-course-updated', courseId },
+      window.location.origin,
+    );
     return data.plan?.result || '备课内容已生成并保存到当前课时文件夹。';
   };
 
@@ -820,12 +868,16 @@ function HomePage({ embedded = false, courseId, scope = 'course', location }: { 
       setError(null);
       setPendingTeacherPlan(null);
       setPendingCoursewareInstruction(message);
-      setTeacherCommandResult(`将根据当前工作目录和教师指令生成课件。确认后进入 OpenMAIC 课件生成与预览流程。\n教师指令：${message}`);
+      setTeacherCommandResult(
+        `将根据当前工作目录和教师指令生成课件。确认后进入 OpenMAIC 课件生成与预览流程。\n教师指令：${message}`,
+      );
       return;
     }
-    if (/(?:生成|创建|编写|撰写).*(?:课程目标|课时目标|学习目标|知识点|教学活动)/u.test(message)
-      && !scope.startsWith('lesson:')
-      && !/第[一二三四五六七八九十\d]+(?:周|课时)/u.test(message)) {
+    if (
+      /(?:生成|创建|编写|撰写).*(?:课程目标|课时目标|学习目标|知识点|教学活动)/u.test(message) &&
+      !scope.startsWith('lesson:') &&
+      !/第[一二三四五六七八九十\d]+(?:周|课时)/u.test(message)
+    ) {
       setError('请先选择课时文件夹，或在命令中明确第几周。');
       return;
     }
@@ -838,13 +890,25 @@ function HomePage({ embedded = false, courseId, scope = 'course', location }: { 
       const response = await fetch(`/api/course-space/${encodeURIComponent(courseId)}/agent`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sessionId: teacherSessionId.current, message, scope: commandScope() }),
+        body: JSON.stringify({
+          sessionId: teacherSessionId.current,
+          message,
+          scope: commandScope(),
+        }),
       });
       const data = await response.json();
-      if (!response.ok || data.success === false) throw new Error(data.error || '备课智能体响应失败');
+      if (!response.ok || data.success === false)
+        throw new Error(data.error || '备课智能体响应失败');
       const plan = data.plan as TeacherOperationPlan | undefined;
-      if (plan?.action?.type === 'create-lesson-files' && plan.action.populateContent && plan.action.lessonIds.length === 1) {
-        window.parent.postMessage({ type: 'teacher-workbench-open-plan', courseId, plan }, window.location.origin);
+      if (
+        plan?.action?.type === 'create-lesson-files' &&
+        plan.action.populateContent &&
+        plan.action.lessonIds.length === 1
+      ) {
+        window.parent.postMessage(
+          { type: 'teacher-workbench-open-plan', courseId, plan },
+          window.location.origin,
+        );
         setTeacherCommandResult('已创建备课计划，正在打开确认与审核页面。');
       } else if (plan?.action && plan.requiresConfirmation) {
         setPendingTeacherPlan(plan);
@@ -889,7 +953,12 @@ function HomePage({ embedded = false, courseId, scope = 'course', location }: { 
   };
 
   return (
-    <div className={cn("min-h-[100dvh] w-full bg-[radial-gradient(circle_at_24%_4%,rgba(176,0,85,0.10),transparent_34%),radial-gradient(circle_at_78%_82%,rgba(193,19,104,0.07),transparent_38%),linear-gradient(180deg,#fffdfE_0%,#fbf7f9_100%)] dark:bg-[radial-gradient(circle_at_24%_4%,rgba(176,0,85,0.18),transparent_34%),radial-gradient(circle_at_78%_82%,rgba(193,19,104,0.10),transparent_38%),linear-gradient(180deg,#170b12_0%,#0f090d_100%)] flex flex-col items-center p-4 overflow-x-hidden", embedded ? "justify-center" : "pt-16 md:p-8 md:pt-16")}>
+    <div
+      className={cn(
+        'min-h-[100dvh] w-full bg-[radial-gradient(circle_at_24%_4%,rgba(176,0,85,0.10),transparent_34%),radial-gradient(circle_at_78%_82%,rgba(193,19,104,0.07),transparent_38%),linear-gradient(180deg,#fffdfE_0%,#fbf7f9_100%)] dark:bg-[radial-gradient(circle_at_24%_4%,rgba(176,0,85,0.18),transparent_34%),radial-gradient(circle_at_78%_82%,rgba(193,19,104,0.10),transparent_38%),linear-gradient(180deg,#170b12_0%,#0f090d_100%)] flex flex-col items-center p-4 overflow-x-hidden',
+        embedded ? 'justify-center' : 'pt-16 md:p-8 md:pt-16',
+      )}
+    >
       <input
         ref={fileInputRef}
         type="file"
@@ -918,7 +987,10 @@ function HomePage({ embedded = false, courseId, scope = 'course', location }: { 
       {/* ═══ Top-right pill (unchanged) ═══ */}
       <div
         ref={toolbarRef}
-        className={cn("fixed top-4 right-4 z-50 flex items-center gap-1 bg-white/60 dark:bg-gray-800/60 backdrop-blur-md px-2 py-1.5 rounded-full border border-gray-100/50 dark:border-gray-700/50 shadow-sm", embedded && "hidden")}
+        className={cn(
+          'fixed top-4 right-4 z-50 flex items-center gap-1 bg-white/60 dark:bg-gray-800/60 backdrop-blur-md px-2 py-1.5 rounded-full border border-gray-100/50 dark:border-gray-700/50 shadow-sm',
+          embedded && 'hidden',
+        )}
       >
         {/* Language Selector */}
         <LanguageSwitcher onOpen={() => setThemeOpen(false)} />
@@ -1023,51 +1095,62 @@ function HomePage({ embedded = false, courseId, scope = 'course', location }: { 
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6, ease: 'easeOut' }}
-        className={cn('relative z-20 w-full max-w-[800px] flex flex-col items-center', !embedded && 'mt-[10vh]')}
+        className={cn(
+          'relative z-20 w-full max-w-[800px] flex flex-col items-center',
+          !embedded && 'mt-[10vh]',
+        )}
       >
         {/* ── Logo ── */}
-        {!embedded && <motion.div
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{
-            delay: 0.1,
-            type: 'spring',
-            stiffness: 200,
-            damping: 20,
-          }}
-          className="mb-2 flex items-center justify-center"
-          aria-label="MENTRA"
-        >
-          <img src="/mentra-logo.svg" alt="MENTRA" className="h-16 md:h-24 w-auto" />
-        </motion.div>}
+        {!embedded && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{
+              delay: 0.1,
+              type: 'spring',
+              stiffness: 200,
+              damping: 20,
+            }}
+            className="mb-2 flex items-center justify-center"
+            aria-label="MENTRA"
+          >
+            <img src="/mentra-logo.svg" alt="MENTRA" className="h-16 md:h-24 w-auto" />
+          </motion.div>
+        )}
 
         {/* ── Slogan ── */}
-        {!embedded && <motion.p
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.25 }}
-          className="text-sm text-muted-foreground/60 mb-8"
-        >
-          Multi-agent Education Network for Teaching, Reflection &amp; Assessment
-        </motion.p>}
-
-        {!embedded && <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.3 }}
-          className="mb-5 flex flex-wrap items-center justify-center gap-3"
-        >
-          <div className="inline-flex items-center gap-2 rounded-full border border-[#B00055]/20 bg-[#B00055]/5 px-4 py-2 text-sm font-medium text-[#B00055] dark:border-[#D34B87]/40 dark:bg-[#B00055]/15 dark:text-[#F08AB6]">
-            <Presentation className="size-4" />快速生成课件
-          </div>
-          <Button
-            variant="outline"
-            className="rounded-full bg-white/70 px-4 dark:bg-slate-900/70"
-            onClick={() => router.push('/course-space')}
+        {!embedded && (
+          <motion.p
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.25 }}
+            className="text-sm text-muted-foreground/60 mb-8"
           >
-            <LibraryBig className="size-4" />完整课程体系
-          </Button>
-        </motion.div>}
+            Multi-agent Education Network for Teaching, Reflection &amp; Assessment
+          </motion.p>
+        )}
+
+        {!embedded && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.3 }}
+            className="mb-5 flex flex-wrap items-center justify-center gap-3"
+          >
+            <div className="inline-flex items-center gap-2 rounded-full border border-[#B00055]/20 bg-[#B00055]/5 px-4 py-2 text-sm font-medium text-[#B00055] dark:border-[#D34B87]/40 dark:bg-[#B00055]/15 dark:text-[#F08AB6]">
+              <Presentation className="size-4" />
+              快速生成课件
+            </div>
+            <Button
+              variant="outline"
+              className="rounded-full bg-white/70 px-4 dark:bg-slate-900/70"
+              onClick={() => router.push('/course-space')}
+            >
+              <LibraryBig className="size-4" />
+              完整课程体系
+            </Button>
+          </motion.div>
+        )}
 
         {/* ── Unified input area ── */}
         <motion.div
@@ -1077,18 +1160,51 @@ function HomePage({ embedded = false, courseId, scope = 'course', location }: { 
           className="w-full"
         >
           <div className="w-full rounded-2xl border border-border/60 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl shadow-xl shadow-black/[0.03] dark:shadow-black/20 transition-shadow focus-within:border-[#B00055]/20 focus-within:shadow-2xl focus-within:shadow-[#B00055]/[0.07]">
-            {embedded && <div className="flex flex-wrap items-center gap-2 px-3 pt-3" aria-label="备课快捷任务">
-              <button type="button" disabled={teacherCommandBusy || !hasUsableProvider} onClick={() => void sendTeacherCommand(form.requirement.trim() || '请结合当前工作目录与课程材料生成一节 AI 增强课件。')} className="rounded-full border border-[#B00055]/20 bg-white/85 px-3 py-1.5 text-xs font-medium text-[#B00055] hover:bg-[#B00055]/10 disabled:opacity-50">课件生成</button>
-              <button type="button" onClick={() => window.parent.postMessage({ type: 'teacher-workbench-open-knowledge-graph', courseId }, window.location.origin)} className="rounded-full border border-[#B00055]/20 bg-white/85 px-3 py-1.5 text-xs font-medium text-[#B00055] hover:bg-[#B00055]/10">知识图谱</button>
-            </div>}
+            {embedded && (
+              <div
+                className="flex flex-wrap items-center gap-2 px-3 pt-3"
+                aria-label="备课快捷任务"
+              >
+                <button
+                  type="button"
+                  disabled={teacherCommandBusy || !hasUsableProvider}
+                  onClick={() =>
+                    void sendTeacherCommand(
+                      form.requirement.trim() ||
+                        '请结合当前工作目录与课程材料生成一节 AI 增强课件。',
+                    )
+                  }
+                  className="rounded-full border border-[#B00055]/20 bg-white/85 px-3 py-1.5 text-xs font-medium text-[#B00055] hover:bg-[#B00055]/10 disabled:opacity-50"
+                >
+                  课件生成
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    window.parent.postMessage(
+                      { type: 'teacher-workbench-open-knowledge-graph', courseId },
+                      window.location.origin,
+                    )
+                  }
+                  className="rounded-full border border-[#B00055]/20 bg-white/85 px-3 py-1.5 text-xs font-medium text-[#B00055] hover:bg-[#B00055]/10"
+                >
+                  知识图谱
+                </button>
+              </div>
+            )}
             {/* Textarea */}
             <div className="relative">
-              {embedded && !form.requirement.trim() && <div aria-hidden="true" className="pointer-events-none absolute left-4 top-4 space-y-1 text-[13px] leading-relaxed text-slate-400 dark:text-slate-500">
-                <p>输入备课命令，例如：</p>
-                <p>「生成第 2 周的课程目标、知识点和教学活动」</p>
-                <p>「根据当前课程材料生成一节 AI 增强课件」</p>
-                <p>「建立课程知识图谱并抽取知识点与课时关系」</p>
-              </div>}
+              {embedded && !form.requirement.trim() && (
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute left-4 top-4 space-y-1 text-[13px] leading-relaxed text-slate-400 dark:text-slate-500"
+                >
+                  <p>输入备课命令，例如：</p>
+                  <p>「生成第 2 周的课程目标、知识点和教学活动」</p>
+                  <p>「根据当前课程材料生成一节 AI 增强课件」</p>
+                  <p>「建立课程知识图谱并抽取知识点与课时关系」</p>
+                </div>
+              )}
               <textarea
                 ref={textareaRef}
                 aria-label={embedded ? '备课命令' : undefined}
@@ -1131,7 +1247,9 @@ function HomePage({ embedded = false, courseId, scope = 'course', location }: { 
                       讲师 PPT
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent side="top" className="text-xs">上传讲师 PPT，选择高保真或 AI 增强流程</TooltipContent>
+                  <TooltipContent side="top" className="text-xs">
+                    上传讲师 PPT，选择高保真或 AI 增强流程
+                  </TooltipContent>
                 </Tooltip>
               )}
 
@@ -1163,7 +1281,9 @@ function HomePage({ embedded = false, courseId, scope = 'course', location }: { 
 
               {/* Send button */}
               <button
-                onClick={() => embedded ? void sendTeacherCommand(form.requirement) : void handleGenerate()}
+                onClick={() =>
+                  embedded ? void sendTeacherCommand(form.requirement) : void handleGenerate()
+                }
                 disabled={embedded ? !form.requirement.trim() || teacherCommandBusy : !canGenerate}
                 className={cn(
                   'shrink-0 h-8 rounded-lg flex items-center justify-center gap-1.5 transition-all px-3',
@@ -1172,16 +1292,69 @@ function HomePage({ embedded = false, courseId, scope = 'course', location }: { 
                     : 'bg-muted text-muted-foreground/40 cursor-not-allowed',
                 )}
               >
-                <span className="text-xs font-medium">{embedded ? teacherCommandBusy ? '执行中…' : '发送命令' : t('toolbar.enterClassroom')}</span>
+                <span className="text-xs font-medium">
+                  {embedded
+                    ? teacherCommandBusy
+                      ? '执行中…'
+                      : '发送命令'
+                    : t('toolbar.enterClassroom')}
+                </span>
                 <ArrowUp className="size-3.5" />
               </button>
             </div>
           </div>
-          {embedded && (teacherCommandResult || pendingTeacherPlan || pendingCoursewareInstruction) && <div className="mt-3 rounded-xl border border-[#B00055]/15 bg-white/90 p-3 text-xs text-slate-700" role="status">
-            <p className="whitespace-pre-wrap">{teacherCommandResult}</p>
-            {pendingTeacherPlan && <div className="mt-2 flex gap-2"><button type="button" disabled={teacherCommandBusy} onClick={() => void confirmTeacherPlan()} className="rounded-lg bg-[#B00055] px-3 py-1.5 font-medium text-white">确认执行</button><button type="button" onClick={() => { setPendingTeacherPlan(null); setTeacherCommandResult(null); }} className="rounded-lg border px-3 py-1.5">取消</button></div>}
-            {pendingCoursewareInstruction && <div className="mt-2 flex gap-2"><button type="button" onClick={confirmCourseware} className="rounded-lg bg-[#B00055] px-3 py-1.5 font-medium text-white">确认生成课件</button><button type="button" onClick={() => { setPendingCoursewareInstruction(null); setTeacherCommandResult(null); }} className="rounded-lg border px-3 py-1.5">取消</button></div>}
-          </div>}
+          {embedded &&
+            (teacherCommandResult || pendingTeacherPlan || pendingCoursewareInstruction) && (
+              <div
+                className="mt-3 rounded-xl border border-[#B00055]/15 bg-white/90 p-3 text-xs text-slate-700"
+                role="status"
+              >
+                <p className="whitespace-pre-wrap">{teacherCommandResult}</p>
+                {pendingTeacherPlan && (
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      type="button"
+                      disabled={teacherCommandBusy}
+                      onClick={() => void confirmTeacherPlan()}
+                      className="rounded-lg bg-[#B00055] px-3 py-1.5 font-medium text-white"
+                    >
+                      确认执行
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPendingTeacherPlan(null);
+                        setTeacherCommandResult(null);
+                      }}
+                      className="rounded-lg border px-3 py-1.5"
+                    >
+                      取消
+                    </button>
+                  </div>
+                )}
+                {pendingCoursewareInstruction && (
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={confirmCourseware}
+                      className="rounded-lg bg-[#B00055] px-3 py-1.5 font-medium text-white"
+                    >
+                      确认生成课件
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPendingCoursewareInstruction(null);
+                        setTeacherCommandResult(null);
+                      }}
+                      className="rounded-lg border px-3 py-1.5"
+                    >
+                      取消
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
         </motion.div>
 
         {showVocationalTestUi && !embedded && (
@@ -1554,9 +1727,11 @@ function HomePage({ embedded = false, courseId, scope = 'course', location }: { 
       />
 
       {/* Footer — flows with content, at the very end */}
-      {!embedded && <div className="mt-auto pt-12 pb-4 text-center text-xs text-muted-foreground/40">
-        MENTRA · Multi-agent Education Network for Teaching, Reflection &amp; Assessment
-      </div>}
+      {!embedded && (
+        <div className="mt-auto pt-12 pb-4 text-center text-xs text-muted-foreground/40">
+          MENTRA · Multi-agent Education Network for Teaching, Reflection &amp; Assessment
+        </div>
+      )}
     </div>
   );
 }
@@ -2102,12 +2277,27 @@ function ClassroomCard({
 
 export default function Page() {
   const router = useRouter();
-  const [view, setView] = useState<{ mode: 'welcome' | 'generate' | 'embedded'; courseId?: string; scope?: string; location?: string }>({ mode: 'welcome' });
+  const [view, setView] = useState<{
+    mode: 'welcome' | 'generate' | 'embedded';
+    courseId?: string;
+    scope?: string;
+    location?: string;
+  }>({ mode: 'welcome' });
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
       const params = new URLSearchParams(window.location.search);
-      setView({ mode: params.get('view') === 'generate' ? params.get('embed') === '1' ? 'embedded' : 'generate' : 'welcome', courseId: params.get('courseId') || undefined, scope: params.get('scope') || undefined, location: params.get('location') || undefined });
+      setView({
+        mode:
+          params.get('view') === 'generate'
+            ? params.get('embed') === '1'
+              ? 'embedded'
+              : 'generate'
+            : 'welcome',
+        courseId: params.get('courseId') || undefined,
+        scope: params.get('scope') || undefined,
+        location: params.get('location') || undefined,
+      });
     }, 0);
     return () => window.clearTimeout(timer);
   }, []);
@@ -2115,7 +2305,12 @@ export default function Page() {
   useEffect(() => {
     const updateScope = (event: MessageEvent) => {
       if (event.origin !== window.location.origin || event.source !== window.parent) return;
-      const data = event.data as { type?: string; courseId?: string; scope?: string; location?: string };
+      const data = event.data as {
+        type?: string;
+        courseId?: string;
+        scope?: string;
+        location?: string;
+      };
       if (data.type !== 'teacher-workbench-scope' || !data.scope || !data.location) return;
       setView((current) => {
         if (current.mode !== 'embedded' || current.courseId !== data.courseId) return current;
@@ -2131,16 +2326,45 @@ export default function Page() {
       window.parent.postMessage({ type: 'teacher-workbench-ready' }, window.location.origin);
   }, [view.mode, view.courseId]);
 
-  if (view.mode !== 'welcome') return <HomePage embedded={view.mode === 'embedded'} courseId={view.courseId} scope={view.scope} location={view.location} />;
+  if (view.mode !== 'welcome')
+    return (
+      <HomePage
+        embedded={view.mode === 'embedded'}
+        courseId={view.courseId}
+        scope={view.scope}
+        location={view.location}
+      />
+    );
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_25%_15%,rgba(176,0,85,.13),transparent_35%),radial-gradient(circle_at_80%_75%,rgba(59,130,246,.09),transparent_38%),#fcf8fa] px-6 text-slate-900">
       <div className="w-full max-w-3xl rounded-[36px] border border-white/80 bg-white/75 px-8 py-16 text-center shadow-[0_35px_90px_-45px_rgba(98,23,59,.3)] backdrop-blur-xl sm:px-16">
         <img src="/mentra-logo.svg" alt="MENTRA" className="mx-auto h-24 w-auto sm:h-32" />
-        <p className="mt-7 text-sm tracking-wide text-slate-500">Multi-agent Education Network for Teaching, Reflection &amp; Assessment</p>
-        <h1 className="mt-10 text-3xl font-semibold tracking-tight sm:text-4xl">欢迎来到教师课程工作区</h1>
-        <p className="mx-auto mt-4 max-w-xl text-sm leading-7 text-slate-600">从课程进入，查看建设状态，并在 Class 工作页制作课件、整理教学产物和协同备课。</p>
-        <Button className="mt-10 h-12 rounded-full bg-[#B00055] px-9 text-base hover:bg-[#8F0046]" onClick={() => router.push('/course-space')}>欢迎进入课程 <ChevronRight className="ml-2 size-5" /></Button>
+        <p className="mt-7 text-sm tracking-wide text-slate-500">
+          Multi-agent Education Network for Teaching, Reflection &amp; Assessment
+        </p>
+        <h1 className="mt-10 text-3xl font-semibold tracking-tight sm:text-4xl">
+          欢迎来到教师课程工作区
+        </h1>
+        <p className="mx-auto mt-4 max-w-xl text-sm leading-7 text-slate-600">
+          从课程进入，查看建设状态，并在 Class 工作页制作课件、整理教学产物和协同备课。
+        </p>
+        <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
+          <Button
+            className="h-12 rounded-full bg-[#B00055] px-9 text-base hover:bg-[#8F0046]"
+            onClick={() => router.push('/course-space')}
+          >
+            欢迎进入课程 <ChevronRight className="ml-2 size-5" />
+          </Button>
+          <Button
+            variant="outline"
+            className="h-12 rounded-full border-[#B00055]/25 bg-white px-9 text-base text-[#8F0046] hover:bg-[#B00055]/5"
+            onClick={() => router.push('/classes')}
+          >
+            <GraduationCap className="mr-2 size-5" />
+            欢迎进入班级
+          </Button>
+        </div>
       </div>
     </main>
   );

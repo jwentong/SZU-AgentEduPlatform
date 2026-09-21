@@ -37,6 +37,11 @@ import { ActionEngine } from '@/lib/action/engine';
 import { createAudioPlayer } from '@/lib/utils/audio-player';
 import { useDiscussionTTS } from '@/lib/hooks/use-discussion-tts';
 import { useWidgetIframeStore } from '@/lib/store/widget-iframe';
+import {
+  formatPlaybackDuration,
+  getCourseDurationSeconds,
+  getSceneDurationSeconds,
+} from '@/lib/playback/timing-display';
 import type { AudioIndicatorState } from '@/components/roundtable/audio-indicator';
 import type { Action, DiscussionAction, SpeechAction } from '@/lib/types/action';
 import { cn } from '@/lib/utils';
@@ -109,9 +114,12 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     const setChatAreaCollapsed = useSettingsStore((s) => s.setChatAreaCollapsed);
     const setTTSMuted = useSettingsStore((s) => s.setTTSMuted);
     const setTTSVolume = useSettingsStore((s) => s.setTTSVolume);
+    const autoPlayLecture = useSettingsStore((s) => s.autoPlayLecture);
 
     // PlaybackEngine state
     const [engineMode, setEngineMode] = useState<EngineMode>('idle');
+    const [sceneElapsedSeconds, setSceneElapsedSeconds] = useState(0);
+    const [courseElapsedSeconds, setCourseElapsedSeconds] = useState(0);
     const [playbackCompleted, setPlaybackCompleted] = useState(false); // Distinguishes "never played" idle from "finished" idle
     const [lectureSpeech, setLectureSpeech] = useState<string | null>(null); // From PlaybackEngine (lecture)
     const [currentPlaybackActionIndex, setCurrentPlaybackActionIndex] = useState<number | null>(0);
@@ -218,6 +226,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     const lectureActionCounterRef = useRef(0);
     const currentPlaybackActionIndexRef = useRef<number | null>(currentPlaybackActionIndex);
     const activeSceneIdRef = useRef<string | null>(currentSceneId);
+    const sceneElapsedSecondsRef = useRef(0);
     const discussionAbortRef = useRef<AbortController | null>(null);
     const presentationIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const cursorSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -225,6 +234,23 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     const stageRef = useRef<HTMLDivElement>(null);
     // Guard to prevent double flash when manual stop triggers onDiscussionEnd
     const manualStopRef = useRef(false);
+
+    useEffect(() => {
+      sceneElapsedSecondsRef.current = 0;
+      setSceneElapsedSeconds(0);
+    }, [currentSceneId]);
+
+    useEffect(() => {
+      const clockRunning =
+        engineMode === 'playing' || engineMode === 'live' || (playbackCompleted && autoPlayLecture);
+      if (!clockRunning) return;
+      const timer = window.setInterval(() => {
+        sceneElapsedSecondsRef.current += 1;
+        setSceneElapsedSeconds(sceneElapsedSecondsRef.current);
+        setCourseElapsedSeconds((seconds) => seconds + 1);
+      }, 1000);
+      return () => window.clearInterval(timer);
+    }, [autoPlayLecture, engineMode, playbackCompleted]);
 
     const updateCurrentPlaybackActionIndex = useCallback((actionIndex: number | null) => {
       currentPlaybackActionIndexRef.current = actionIndex;
@@ -807,6 +833,11 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
             // Auto-play: advance to next scene after a short pause
             const { autoPlayLecture } = useSettingsStore.getState();
             if (autoPlayLecture) {
+              const plannedSeconds = getSceneDurationSeconds(currentScene, stage, scenes);
+              const transitionDelayMs = Math.max(
+                250,
+                (plannedSeconds - sceneElapsedSecondsRef.current) * 1000,
+              );
               setTimeout(() => {
                 const stageState = useStageStore.getState();
                 if (!useSettingsStore.getState().autoPlayLecture) return;
@@ -840,7 +871,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
                   autoStartRef.current = true;
                   stageState.setCurrentSceneId(PENDING_SCENE_ID);
                 }
-              }, 1500);
+              }, transitionDelayMs);
             }
           },
         });
@@ -927,6 +958,22 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       audioPlayerRef.current.setPlaybackRate(playbackSpeed);
     }, [playbackSpeed]);
 
+    // Interactive HTML scenes advance when their accumulated PLAYING time is
+    // exhausted. Pausing freezes both the display and the transition.
+    useEffect(() => {
+      if (!currentScene || currentScene.type !== 'interactive') return;
+      const durationSeconds = getSceneDurationSeconds(currentScene, stage, scenes);
+      if (sceneElapsedSeconds < durationSeconds) return;
+      engineRef.current?.stop();
+      const store = useStageStore.getState();
+      const index = store.scenes.findIndex((scene) => scene.id === currentScene.id);
+      const next = store.scenes[index + 1];
+      if (next) {
+        autoStartRef.current = true;
+        store.setCurrentSceneId(next.id);
+      }
+    }, [currentScene, sceneElapsedSeconds, scenes, stage]);
+
     /**
      * Handle discussion SSE — POST /api/chat and push events to engine
      */
@@ -954,6 +1001,14 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       () =>
         currentScene?.actions?.find((a): a is SpeechAction => a.type === 'speech')?.text ?? null,
       [currentScene],
+    );
+
+    const currentSceneRemainingSeconds = currentScene
+      ? Math.max(0, getSceneDurationSeconds(currentScene, stage, scenes) - sceneElapsedSeconds)
+      : 0;
+    const courseRemainingSeconds = Math.max(
+      0,
+      getCourseDurationSeconds(stage, scenes) - courseElapsedSeconds,
     );
 
     // Whether the speaking agent is a student (for bubble role derivation)
@@ -1353,6 +1408,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
               mode={mode}
               canEdit={!!canEnterProMode}
               onToggleEditMode={onEnterProMode}
+              totalDurationMinutes={Math.ceil(getCourseDurationSeconds(stage, scenes) / 60)}
             />
           )}
 
@@ -1366,6 +1422,13 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
             }}
             suppressHydrationWarning
           >
+            {currentScene && (
+              <div className="pointer-events-none absolute left-1/2 top-3 z-30 -translate-x-1/2 rounded-full border border-white/60 bg-slate-950/75 px-4 py-2 text-xs font-medium text-white shadow-lg backdrop-blur-md">
+                本页 {formatPlaybackDuration(currentSceneRemainingSeconds)}
+                <span className="mx-2 text-white/35">｜</span>
+                课程剩余 {formatPlaybackDuration(courseRemainingSeconds)}
+              </div>
+            )}
             <CanvasArea
               currentScene={currentScene}
               currentSceneIndex={currentSceneIndex}

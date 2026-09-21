@@ -1,6 +1,6 @@
 'use client';
 
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Clock3 } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { useRouter } from 'next/navigation';
 import type { StageMode } from '@/lib/types/stage';
@@ -11,9 +11,16 @@ interface HeaderProps {
   readonly mode?: StageMode;
   readonly canEdit?: boolean;
   readonly onToggleEditMode?: () => void;
+  readonly totalDurationMinutes?: number;
 }
 
-export function Header({ currentSceneTitle, mode, canEdit, onToggleEditMode }: HeaderProps) {
+export function Header({
+  currentSceneTitle,
+  mode,
+  canEdit,
+  onToggleEditMode,
+  totalDurationMinutes,
+}: HeaderProps) {
   const { t } = useI18n();
   const router = useRouter();
 
@@ -48,6 +55,12 @@ export function Header({ currentSceneTitle, mode, canEdit, onToggleEditMode }: H
               >
                 {currentSceneTitle || t('common.loading')}
               </h1>
+            </div>
+          )}
+          {mode !== 'edit' && totalDurationMinutes != null && (
+            <div className="ml-2 flex shrink-0 items-center gap-1.5 rounded-full border border-violet-100 bg-violet-50/80 px-3 py-1.5 text-xs font-medium text-violet-700 dark:border-violet-800/60 dark:bg-violet-950/30 dark:text-violet-300">
+              <Clock3 className="h-3.5 w-3.5" />
+              预计 {Math.round(totalDurationMinutes)} 分钟
             </div>
           )}
         </div>

@@ -171,6 +171,10 @@ export interface Stage {
    * vocational.
    */
   taskEngineMode?: boolean;
+  /** Course-level target used by the playback scheduler. */
+  timing?: {
+    targetDurationMinutes?: number;
+  };
 }
 
 /**
@@ -239,6 +243,14 @@ export interface SceneCore<TAction = Action> {
 
   // Multi-agent discussion configuration
   multiAgent?: MultiAgentConfig;
+
+  /** Page-level timing policy. Legacy documents may omit it. */
+  timing?: {
+    plannedDurationSec?: number;
+    mode?: 'narration-fit' | 'fixed' | 'interactive-demo' | 'quiz';
+    quizSecondsPerQuestion?: number;
+    autoAdvance?: boolean;
+  };
 
   // Metadata
   createdAt?: number;

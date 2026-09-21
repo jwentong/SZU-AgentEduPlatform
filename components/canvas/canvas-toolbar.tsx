@@ -13,6 +13,7 @@ import {
   Volume2,
   VolumeX,
   Repeat,
+  Clock3,
   Maximize2,
   Minimize2,
 } from 'lucide-react';
@@ -21,6 +22,7 @@ import { useStageStore } from '@/lib/store';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useSoftCloseCountdown } from '@/components/chat/use-soft-close-countdown';
+import { getSceneDurationSeconds } from '@/lib/playback/timing-display';
 
 export interface CanvasToolbarProps {
   readonly currentSceneIndex: number;
@@ -128,6 +130,7 @@ export function CanvasToolbar({
 
   // Volume slider hover state
   const [volumeHover, setVolumeHover] = useState(false);
+  const [timingOpen, setTimingOpen] = useState(false);
   const volumeTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const volumeContainerRef = useRef<HTMLDivElement>(null);
 
@@ -145,6 +148,12 @@ export function CanvasToolbar({
 
   // Effective volume for display
   const effectiveVolume = ttsMuted ? 0 : ttsVolume;
+  const stage = useStageStore((s) => s.stage);
+  const currentScene = useStageStore((s) => s.getCurrentScene());
+  const scenes = useStageStore((s) => s.scenes);
+  const updateStage = useStageStore((s) => s.updateStage);
+  const updateScene = useStageStore((s) => s.updateScene);
+  const sceneSeconds = currentScene ? getSceneDurationSeconds(currentScene, stage, scenes) : 0;
   const presentationLabel = isPresenting ? t('stage.exitFullscreen') : t('stage.fullscreen');
 
   return (
@@ -198,9 +207,7 @@ export function CanvasToolbar({
                 className={cn(
                   ctrlBtn,
                   'w-6 h-6',
-                  ttsMuted
-                    ? 'text-red-500 dark:text-red-400'
-                    : 'text-gray-500 dark:text-gray-400',
+                  ttsMuted ? 'text-red-500 dark:text-red-400' : 'text-gray-500 dark:text-gray-400',
                 )}
                 aria-label={ttsMuted ? 'Unmute' : 'Mute'}
               >
@@ -275,6 +282,76 @@ export function CanvasToolbar({
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
+          )}
+
+          {/* Two-level course/page timing */}
+          {currentScene && (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setTimingOpen((open) => !open)}
+                className={cn(ctrlBtn, 'w-6 h-6 text-gray-500 dark:text-gray-400')}
+                aria-label="课程与页面时间控制"
+                title="课程与页面时间控制"
+              >
+                <Clock3 className="w-3.5 h-3.5" />
+              </button>
+              {timingOpen && (
+                <div className="absolute bottom-full left-1/2 z-50 mb-2 w-56 -translate-x-1/2 rounded-xl border border-gray-200 bg-white p-3 text-xs shadow-xl dark:border-gray-700 dark:bg-gray-800">
+                  <label className="mb-2 flex items-center justify-between gap-3">
+                    <span className="text-gray-600 dark:text-gray-300">课程目标时长</span>
+                    <span className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={1}
+                        max={600}
+                        value={stage?.timing?.targetDurationMinutes ?? 45}
+                        onChange={(event) =>
+                          updateStage({
+                            timing: {
+                              ...stage?.timing,
+                              targetDurationMinutes: Math.max(1, Number(event.target.value) || 1),
+                            },
+                          })
+                        }
+                        className="w-16 rounded border border-gray-200 bg-transparent px-2 py-1 text-right dark:border-gray-600"
+                      />
+                      分钟
+                    </span>
+                  </label>
+                  <label className="flex items-center justify-between gap-3">
+                    <span className="text-gray-600 dark:text-gray-300">当前页面时长</span>
+                    <span className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={5}
+                        max={3600}
+                        disabled={currentScene.type === 'quiz'}
+                        value={sceneSeconds}
+                        onChange={(event) =>
+                          updateScene(currentScene.id, {
+                            timing: {
+                              ...currentScene.timing,
+                              plannedDurationSec: Math.max(5, Number(event.target.value) || 5),
+                              mode:
+                                currentScene.type === 'interactive'
+                                  ? 'interactive-demo'
+                                  : 'narration-fit',
+                              autoAdvance: true,
+                            },
+                          })
+                        }
+                        className="w-16 rounded border border-gray-200 bg-transparent px-2 py-1 text-right disabled:opacity-50 dark:border-gray-600"
+                      />
+                      秒
+                    </span>
+                  </label>
+                  {currentScene.type === 'quiz' && (
+                    <p className="mt-2 text-[10px] text-gray-400">练习题固定每题 60 秒。</p>
+                  )}
+                </div>
+              )}
+            </div>
           )}
 
           <CtrlDivider />

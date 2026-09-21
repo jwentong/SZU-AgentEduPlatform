@@ -30,6 +30,7 @@ import type { SceneOutline } from '@/lib/types/generation';
 import type { WidgetType } from '@/lib/types/widgets';
 import { changeOutlineType } from '@openmaic/generation';
 import { countBlockingOutlines, validateOutline } from '@/lib/edit/content-validation';
+import { formatPlaybackDuration, getOutlineDurationSeconds } from '@/lib/playback/timing-display';
 
 type SceneType = SceneOutline['type'];
 
@@ -46,6 +47,7 @@ interface OutlinesEditorProps {
   isStreaming?: boolean;
   /** Collapse the editor back to the preview surface (small streaming card / outline-ready). */
   onCollapse?: () => void;
+  targetDurationMinutes?: number;
 }
 
 const SCENE_TYPES: SceneType[] = ['slide', 'quiz', 'interactive', 'pbl'];
@@ -120,6 +122,7 @@ export function OutlinesEditor({
   isLoading = false,
   isStreaming = false,
   onCollapse,
+  targetDurationMinutes = 45,
 }: OutlinesEditorProps) {
   const { t } = useI18n();
   const sceneTypeLabel = useSceneTypeLabel();
@@ -345,6 +348,11 @@ export function OutlinesEditor({
                         setDraggingId(null);
                         setDragOverId(null);
                       }}
+                      durationSeconds={getOutlineDurationSeconds(
+                        outline,
+                        targetDurationMinutes,
+                        outlines.length,
+                      )}
                     />
                     {!isStreaming && (
                       <InsertDivider
@@ -456,6 +464,7 @@ interface SceneRowProps {
   onDragEnd: () => void;
   onDragEnter: () => void;
   onDrop: (sourceId: string) => void;
+  durationSeconds: number;
 }
 
 function SceneRow({
@@ -477,6 +486,7 @@ function SceneRow({
   onDragEnd,
   onDragEnter,
   onDrop,
+  durationSeconds,
 }: SceneRowProps) {
   const { t } = useI18n();
   const theme = TYPE_THEME[outline.type] ?? TYPE_THEME.slide;
@@ -632,6 +642,10 @@ function SceneRow({
               )}
             />
             <div className="flex shrink-0 items-center gap-1.5 pt-0.5">
+              <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium tabular-nums text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                {outline.type === 'quiz' && `${outline.quizConfig?.questionCount ?? 3} 题 · `}
+                {formatPlaybackDuration(durationSeconds)}
+              </span>
               {/* Cascading control: type-specific config (left) joined to the type selector (right) */}
               <div className="inline-flex items-center overflow-hidden rounded-full">
                 {!disabled && outline.type === 'quiz' && (
