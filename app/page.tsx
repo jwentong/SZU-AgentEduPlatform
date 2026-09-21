@@ -27,7 +27,6 @@ import {
   X,
   Presentation,
   LibraryBig,
-  GraduationCap,
 } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { LanguageSwitcher } from '@/components/language-switcher';
@@ -2357,12 +2356,10 @@ export default function Page() {
             欢迎进入课程 <ChevronRight className="ml-2 size-5" />
           </Button>
           <Button
-            variant="outline"
-            className="h-12 rounded-full border-[#B00055]/25 bg-white px-9 text-base text-[#8F0046] hover:bg-[#B00055]/5"
+            className="h-12 rounded-full bg-[#B00055] px-9 text-base hover:bg-[#8F0046]"
             onClick={() => router.push('/classes')}
           >
-            <GraduationCap className="mr-2 size-5" />
-            欢迎进入班级
+            欢迎进入班级 <ChevronRight className="ml-2 size-5" />
           </Button>
         </div>
       </div>

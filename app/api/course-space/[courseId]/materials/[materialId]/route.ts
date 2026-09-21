@@ -1,4 +1,5 @@
 import { type NextRequest, NextResponse } from 'next/server';
+import { nanoid } from 'nanoid';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import {
   readCourseMaterialBytes,
@@ -36,6 +37,16 @@ export async function PATCH(
   }
   const body = (await req.json()) as { active?: boolean };
   const active = body.active === true;
+  const material = course.materials.find((item) => item.id === materialId)!;
+  if (!active) {
+    return apiError('INVALID_REQUEST', 409, '材料发布到班级后不可撤回');
+  }
+  if (material.classPublicationId) {
+    return apiSuccess({ material });
+  }
+  if (course.status !== 'active') {
+    return apiError('INVALID_REQUEST', 409, '请先发布课程，再将材料发布到班级');
+  }
   const now = Date.now();
   const updated = await updateServerCourse(courseId, (current) => ({
     ...current,
@@ -44,7 +55,9 @@ export async function PATCH(
         ? {
             ...item,
             classVisible: active,
-            activatedAt: active ? now : undefined,
+            activatedAt: now,
+            classPublicationId: `CLS-M-${nanoid(12)}`,
+            classPublishedAt: now,
             updatedAt: now,
           }
         : item,

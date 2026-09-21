@@ -1,4 +1,5 @@
 import { type NextRequest } from 'next/server';
+import { nanoid } from 'nanoid';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import {
   readCourseArtifact,
@@ -30,11 +31,29 @@ export async function PATCH(
   };
   if (body.action === 'activate' || body.action === 'deactivate') {
     const active = body.action === 'activate';
+    if (!active) {
+      return apiError('INVALID_REQUEST', 409, '产物发布到班级后不可撤回');
+    }
+    if (course.status !== 'active') {
+      return apiError('INVALID_REQUEST', 409, '请先发布课程，再将产物发布到班级');
+    }
+    if (artifact.classPublicationId) {
+      return apiSuccess({ artifact });
+    }
+    const publishedAt = Date.now();
     const updated = await saveCourseArtifact({
       ...artifact,
-      classVisible: active,
-      activatedAt: active ? Date.now() : undefined,
-      updatedAt: Date.now(),
+      status: 'published',
+      approvedAt: artifact.approvedAt ?? publishedAt,
+      classVisible: true,
+      activatedAt: publishedAt,
+      classPublicationId: `CLS-A-${nanoid(12)}`,
+      classPublishedAt: publishedAt,
+      updatedAt: publishedAt,
+    });
+    await updateCourseJob(artifact.jobId, {
+      status: 'approved',
+      message: '教师确认并发布到 Class 通道',
     });
     return apiSuccess({ artifact: updated });
   }

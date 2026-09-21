@@ -6,9 +6,13 @@ import {
   ArrowLeft,
   BookOpen,
   Bot,
+  ChevronDown,
+  ChevronRight,
   ExternalLink,
+  FileText,
+  Folder,
+  Presentation,
   Sparkles,
-  Upload,
   Users,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -23,6 +27,13 @@ type ClassResource = {
   status: string;
   url: string;
   activatedAt?: number;
+  publicationId: string;
+  publishedAt?: number;
+  scope:
+    | { type: 'course' }
+    | { type: 'module'; moduleId: string }
+    | { type: 'lesson'; lessonId: string }
+    | { type: 'lessons'; lessonIds: string[] };
 };
 
 type Detail = {
@@ -46,11 +57,42 @@ const statusLabel: Record<CourseStudentLearningState['status'], string> = {
   'needs-attention': '需要关注',
 };
 
+function PublishedResourceRow({ resource }: { resource: ClassResource }) {
+  const Icon =
+    resource.kind === 'material'
+      ? FileText
+      : resource.type === 'lesson-courseware'
+        ? Presentation
+        : Sparkles;
+  return (
+    <a
+      href={resource.url}
+      target="_blank"
+      rel="noreferrer"
+      className="group flex items-center gap-2 rounded-lg px-2 py-2 text-xs text-slate-600 hover:bg-[#B00055]/5 hover:text-[#8F0046]"
+    >
+      <Icon
+        className={`size-4 shrink-0 ${resource.origin === 'teacher' ? 'text-blue-500' : 'text-fuchsia-500'}`}
+      />
+      <span className="min-w-0 flex-1 truncate">{resource.title}</span>
+      <span
+        className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 font-mono text-[9px] text-emerald-700"
+        title={resource.publicationId}
+      >
+        {resource.publicationId.slice(-6)}
+      </span>
+      <ExternalLink className="size-3.5 shrink-0 text-slate-300 group-hover:text-[#B00055]" />
+    </a>
+  );
+}
+
 export default function ClassDetailPage() {
   const { courseId } = useParams<{ courseId: string }>();
   const router = useRouter();
   const [detail, setDetail] = useState<Detail>();
   const [error, setError] = useState('');
+  const [expandedModules, setExpandedModules] = useState<Set<string>>(new Set());
+  const [expandedLessons, setExpandedLessons] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     void fetch(`/api/classes/${courseId}`, { cache: 'no-store' })
@@ -107,7 +149,7 @@ export default function ClassDetailPage() {
                 {detail.course.modules.length} 个模块
               </span>
               <span className="rounded-full bg-white/12 px-3 py-1.5">
-                {detail.resources.length} 项已激活资料
+                {detail.resources.length} 项已发布资料
               </span>
             </div>
           </div>
@@ -118,47 +160,136 @@ export default function ClassDetailPage() {
               <h2 className="text-lg font-semibold">已公布课程资料</h2>
             </div>
             <p className="mt-1 text-xs text-slate-500">
-              仅显示教师在工作台点击“激活到班级”的材料和AI产物。
+              仅显示教师逐项确认发布的材料和 AI 产物；发布后不可撤回。
             </p>
-            {detail.resources.length === 0 ? (
-              <div className="mt-5 rounded-2xl border border-dashed p-10 text-center text-sm text-slate-400">
-                尚未激活任何班级资料。
+            <div className="mt-5 overflow-hidden rounded-2xl border bg-slate-50/60">
+              <div className="border-b bg-white px-4 py-3">
+                <div className="flex items-center gap-2 text-sm font-semibold">
+                  <Folder className="size-4 text-[#B00055]" />
+                  课程级文件
+                  <span className="ml-auto text-xs font-normal text-slate-400">
+                    {detail.resources.filter((item) => item.scope.type === 'course').length} 项
+                  </span>
+                </div>
+                <div className="ml-6 mt-1 border-l pl-2">
+                  {detail.resources.filter((item) => item.scope.type === 'course').length ? (
+                    detail.resources
+                      .filter((item) => item.scope.type === 'course')
+                      .map((resource) => (
+                        <PublishedResourceRow key={resource.id} resource={resource} />
+                      ))
+                  ) : (
+                    <p className="px-2 py-2 text-xs text-slate-400">等待教师发布课程级产物</p>
+                  )}
+                </div>
               </div>
-            ) : (
-              <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                {detail.resources.map((resource) => (
-                  <a
-                    key={resource.id}
-                    href={resource.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="group rounded-2xl border p-4 transition hover:border-[#B00055]/30 hover:shadow-md"
-                  >
-                    <div className="flex items-start justify-between">
-                      <span
-                        className={`grid size-10 place-items-center rounded-xl ${resource.origin === 'teacher' ? 'bg-blue-50 text-blue-600' : 'bg-fuchsia-50 text-fuchsia-600'}`}
+              <div className="max-h-[620px] overflow-y-auto p-3">
+                {detail.course.modules.map((module) => {
+                  const moduleResources = detail.resources.filter(
+                    (item) => item.scope.type === 'module' && item.scope.moduleId === module.id,
+                  );
+                  const moduleOpen = expandedModules.has(module.id);
+                  const lessonResourceCount = module.lessons.reduce(
+                    (count, lesson) =>
+                      count +
+                      detail.resources.filter(
+                        (item) =>
+                          (item.scope.type === 'lesson' && item.scope.lessonId === lesson.id) ||
+                          (item.scope.type === 'lessons' &&
+                            item.scope.lessonIds.includes(lesson.id)),
+                      ).length,
+                    0,
+                  );
+                  return (
+                    <div key={module.id} className="mb-1">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedModules((current) => {
+                            const next = new Set(current);
+                            if (next.has(module.id)) next.delete(module.id);
+                            else next.add(module.id);
+                            return next;
+                          })
+                        }
+                        className="flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left text-sm hover:bg-white"
                       >
-                        {resource.origin === 'teacher' ? (
-                          <Upload className="size-5" />
+                        {moduleOpen ? (
+                          <ChevronDown className="size-4 text-slate-400" />
                         ) : (
-                          <Sparkles className="size-5" />
+                          <ChevronRight className="size-4 text-slate-400" />
                         )}
-                      </span>
-                      <ExternalLink className="size-4 text-slate-300 group-hover:text-[#B00055]" />
+                        <Folder className="size-4 text-amber-500" />
+                        <span className="min-w-0 flex-1 truncate font-medium">{module.title}</span>
+                        <span className="text-xs text-slate-400">
+                          {moduleResources.length + lessonResourceCount} 项
+                        </span>
+                      </button>
+                      {moduleOpen && (
+                        <div className="ml-5 border-l pl-2">
+                          {moduleResources.map((resource) => (
+                            <PublishedResourceRow key={resource.id} resource={resource} />
+                          ))}
+                          {module.lessons.map((lesson) => {
+                            const lessonResources = detail.resources.filter(
+                              (item) =>
+                                (item.scope.type === 'lesson' &&
+                                  item.scope.lessonId === lesson.id) ||
+                                (item.scope.type === 'lessons' &&
+                                  item.scope.lessonIds.includes(lesson.id)),
+                            );
+                            const lessonOpen = expandedLessons.has(lesson.id);
+                            return (
+                              <div key={lesson.id}>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setExpandedLessons((current) => {
+                                      const next = new Set(current);
+                                      if (next.has(lesson.id)) next.delete(lesson.id);
+                                      else next.add(lesson.id);
+                                      return next;
+                                    })
+                                  }
+                                  className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-xs hover:bg-white"
+                                >
+                                  {lessonOpen ? (
+                                    <ChevronDown className="size-3.5 text-slate-400" />
+                                  ) : (
+                                    <ChevronRight className="size-3.5 text-slate-400" />
+                                  )}
+                                  <Folder className="size-3.5 text-[#B00055]" />
+                                  <span className="min-w-0 flex-1 truncate">{lesson.title}</span>
+                                  <span className="text-[10px] text-slate-400">
+                                    {lessonResources.length}
+                                  </span>
+                                </button>
+                                {lessonOpen && (
+                                  <div className="ml-5 border-l pl-2">
+                                    {lessonResources.length ? (
+                                      lessonResources.map((resource) => (
+                                        <PublishedResourceRow
+                                          key={`${lesson.id}-${resource.id}`}
+                                          resource={resource}
+                                        />
+                                      ))
+                                    ) : (
+                                      <p className="px-2 py-2 text-[11px] text-slate-400">
+                                        等待教师发布产物
+                                      </p>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
-                    <h3 className="mt-3 line-clamp-2 font-medium">{resource.title}</h3>
-                    <div className="mt-3 flex items-center gap-2 text-[11px]">
-                      <span className="rounded-full bg-slate-100 px-2 py-1">
-                        {resource.origin === 'teacher' ? '教师上传' : 'AI生成'}
-                      </span>
-                      <span className="text-slate-400">
-                        {resource.kind === 'material' ? '原始材料' : '教学产物'}
-                      </span>
-                    </div>
-                  </a>
-                ))}
+                  );
+                })}
               </div>
-            )}
+            </div>
           </div>
         </section>
 

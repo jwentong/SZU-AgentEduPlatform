@@ -92,6 +92,46 @@ function OriginBadge({
   );
 }
 
+function ClassPublicationBadge({
+  publicationId,
+  onPublish,
+}: {
+  publicationId?: string;
+  onPublish?: () => void;
+}) {
+  const published = Boolean(publicationId);
+  return (
+    <span
+      role={!published && onPublish ? 'button' : undefined}
+      tabIndex={!published && onPublish ? 0 : undefined}
+      onClick={(event) => {
+        if (published || !onPublish) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onPublish();
+      }}
+      onKeyDown={(event) => {
+        if (published || !onPublish || (event.key !== 'Enter' && event.key !== ' ')) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onPublish();
+      }}
+      className={`inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[9px] font-medium leading-none ${
+        published
+          ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+          : onPublish
+            ? 'cursor-pointer border-[#B00055]/25 bg-white text-[#B00055] hover:bg-[#B00055] hover:text-white'
+            : 'border-slate-200 bg-slate-50 text-slate-500'
+      }`}
+      title={
+        published ? `已发布到 Class 通道 · 唯一标志 ${publicationId}` : '尚未发布到 Class 通道'
+      }
+    >
+      {published ? `已发布·${publicationId!.slice(-6)}` : '未发布'}
+    </span>
+  );
+}
+
 export function CourseWorkspaceExplorer({
   course,
   artifacts,
@@ -239,14 +279,25 @@ export function CourseWorkspaceExplorer({
     setSelectedFileId('');
     onScopeChange?.(next);
   };
-  const toggleClassVisibility = async () => {
-    if (!selectedFile?.artifact && !selectedFile?.material) return;
-    const currentlyActive = Boolean(
-      selectedFile.artifact?.classVisible ?? selectedFile.material?.classVisible,
-    );
-    const url = selectedFile.artifact
-      ? `/api/course-space/${course.id}/artifacts/${selectedFile.artifact.id}`
-      : `/api/course-space/${course.id}/materials/${selectedFile.material!.id}`;
+  const publishFileToClass = async (
+    target?: Pick<BrowserFile, 'artifact' | 'material' | 'courseFile'>,
+  ) => {
+    const targetFile = target ?? selectedFile;
+    if (!targetFile?.artifact && !targetFile?.material && !targetFile?.courseFile) return;
+    const publicationId =
+      targetFile.artifact?.classPublicationId ??
+      targetFile.material?.classPublicationId ??
+      targetFile.courseFile?.classPublicationId;
+    if (publicationId) {
+      setTreeMessage(`该资料已发布到班级，唯一标志：${publicationId}。发布后不可撤回。`);
+      return;
+    }
+    if (!window.confirm('确认将该文件发布到 Class 通道吗？发布后不可撤回。')) return;
+    const url = targetFile.artifact
+      ? `/api/course-space/${course.id}/artifacts/${targetFile.artifact.id}`
+      : targetFile.material
+        ? `/api/course-space/${course.id}/materials/${targetFile.material.id}`
+        : `/api/course-space/${course.id}/lesson-files/${targetFile.courseFile!.id}`;
     setActivating(true);
     setTreeMessage('');
     try {
@@ -254,19 +305,28 @@ export function CourseWorkspaceExplorer({
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(
-          selectedFile.artifact
-            ? { action: currentlyActive ? 'deactivate' : 'activate' }
-            : { active: !currentlyActive },
+          targetFile.artifact
+            ? { action: 'activate' }
+            : targetFile.material
+              ? { active: true }
+              : { action: 'publish' },
         ),
       });
       const result = (await response.json().catch(() => undefined)) as
-        | { error?: string }
+        | {
+            error?: string;
+            artifact?: { classPublicationId?: string };
+            material?: { classPublicationId?: string };
+            file?: { classPublicationId?: string };
+          }
         | undefined;
-      if (!response.ok) throw new Error(result?.error || '班级资料状态更新失败');
+      if (!response.ok) throw new Error(result?.error || '班级资料发布失败');
       await onRefresh();
-      setTreeMessage(
-        currentlyActive ? '已从班级资料中取消激活。' : '已激活，学生可在班级通道查看。',
-      );
+      const issuedId =
+        result?.artifact?.classPublicationId ??
+        result?.material?.classPublicationId ??
+        result?.file?.classPublicationId;
+      setTreeMessage(`已发布到班级${issuedId ? `，唯一标志：${issuedId}` : ''}。发布后不可撤回。`);
     } catch (error) {
       setTreeMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -498,6 +558,8 @@ export function CourseWorkspaceExplorer({
               <div className="flex flex-wrap items-center gap-1.5">
                 <OriginBadge origin="teacher" />
                 <OriginBadge origin="agent" />
+                <ClassPublicationBadge publicationId="CLS-…" />
+                <ClassPublicationBadge />
               </div>
             </div>
           )}
@@ -553,8 +615,24 @@ export function CourseWorkspaceExplorer({
                   ) : (
                     <FileText className="size-3.5 shrink-0 text-blue-500" />
                   )}
-                  <span className="truncate">{artifact.title}</span>
-                  {showOriginBadges && <OriginBadge origin="agent" className="ml-auto" />}
+                  <span className="min-w-0 flex-1 truncate">{artifact.title}</span>
+                  {showOriginBadges && (
+                    <span className="ml-auto flex shrink-0 items-center gap-1">
+                      <OriginBadge origin="agent" />
+                      <ClassPublicationBadge
+                        publicationId={
+                          course.status === 'active' && artifact.status === 'published'
+                            ? artifact.classPublicationId
+                            : undefined
+                        }
+                        onPublish={
+                          course.status === 'active'
+                            ? () => void publishFileToClass({ artifact })
+                            : undefined
+                        }
+                      />
+                    </span>
+                  )}
                 </button>
               ))}
             </div>
@@ -700,9 +778,23 @@ export function CourseWorkspaceExplorer({
                                     className={`my-0.5 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] ${selectedFileId === material.id ? 'bg-[#B00055]/10 font-medium text-[#8F0046]' : 'text-slate-500 hover:bg-slate-100'}`}
                                   >
                                     <Presentation className="size-3.5 shrink-0 text-orange-500" />
-                                    <span className="truncate">{material.name}</span>
+                                    <span className="min-w-0 flex-1 truncate">{material.name}</span>
                                     {showOriginBadges && (
-                                      <OriginBadge origin="teacher" className="ml-auto" />
+                                      <span className="ml-auto flex shrink-0 items-center gap-1">
+                                        <OriginBadge origin="teacher" />
+                                        <ClassPublicationBadge
+                                          publicationId={
+                                            course.status === 'active'
+                                              ? material.classPublicationId
+                                              : undefined
+                                          }
+                                          onPublish={
+                                            course.status === 'active'
+                                              ? () => void publishFileToClass({ material })
+                                              : undefined
+                                          }
+                                        />
+                                      </span>
                                     )}
                                   </button>
                                 ))}
@@ -721,9 +813,23 @@ export function CourseWorkspaceExplorer({
                                     className={`my-0.5 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] ${selectedFileId === file.id ? 'bg-[#B00055]/10 font-medium text-[#8F0046]' : 'text-slate-500 hover:bg-slate-100'}`}
                                   >
                                     <FileText className="size-3.5 shrink-0 text-blue-500" />
-                                    <span className="truncate">{file.title}</span>
+                                    <span className="min-w-0 flex-1 truncate">{file.title}</span>
                                     {showOriginBadges && (
-                                      <OriginBadge origin="agent" className="ml-auto" />
+                                      <span className="ml-auto flex shrink-0 items-center gap-1">
+                                        <OriginBadge origin="agent" />
+                                        <ClassPublicationBadge
+                                          publicationId={
+                                            course.status === 'active'
+                                              ? file.classPublicationId
+                                              : undefined
+                                          }
+                                          onPublish={
+                                            course.status === 'active'
+                                              ? () => void publishFileToClass({ courseFile: file })
+                                              : undefined
+                                          }
+                                        />
+                                      </span>
                                     )}
                                   </button>
                                 ))}
@@ -746,9 +852,26 @@ export function CourseWorkspaceExplorer({
                                     ) : (
                                       <FileText className="size-3.5 shrink-0 text-blue-500" />
                                     )}
-                                    <span className="truncate">{artifact.title}</span>
+                                    <span className="min-w-0 flex-1 truncate">
+                                      {artifact.title}
+                                    </span>
                                     {showOriginBadges && (
-                                      <OriginBadge origin="agent" className="ml-auto" />
+                                      <span className="ml-auto flex shrink-0 items-center gap-1">
+                                        <OriginBadge origin="agent" />
+                                        <ClassPublicationBadge
+                                          publicationId={
+                                            course.status === 'active' &&
+                                            artifact.status === 'published'
+                                              ? artifact.classPublicationId
+                                              : undefined
+                                          }
+                                          onPublish={
+                                            course.status === 'active'
+                                              ? () => void publishFileToClass({ artifact })
+                                              : undefined
+                                          }
+                                        />
+                                      </span>
                                     )}
                                   </button>
                                 ))}
@@ -822,22 +945,37 @@ export function CourseWorkspaceExplorer({
                 <Button
                   size="sm"
                   variant={
-                    selectedFile.artifact?.classVisible || selectedFile.material?.classVisible
+                    selectedFile.artifact?.classPublicationId ||
+                    selectedFile.material?.classPublicationId
                       ? 'default'
                       : 'outline'
                   }
-                  disabled={activating}
-                  onClick={() => void toggleClassVisibility()}
+                  disabled={
+                    activating ||
+                    course.status !== 'active' ||
+                    Boolean(
+                      selectedFile.artifact?.classPublicationId ||
+                      selectedFile.material?.classPublicationId,
+                    )
+                  }
+                  onClick={() => void publishFileToClass()}
                   className={
-                    selectedFile.artifact?.classVisible || selectedFile.material?.classVisible
-                      ? 'bg-emerald-600 hover:bg-emerald-700'
-                      : ''
+                    selectedFile.artifact?.classPublicationId ||
+                    selectedFile.material?.classPublicationId
+                      ? 'bg-emerald-600 disabled:opacity-100'
+                      : course.status === 'active'
+                        ? 'border-[#B00055] bg-[#B00055] text-white hover:bg-[#8F0046] hover:text-white'
+                        : ''
                   }
                 >
                   <Radio className="mr-1 size-3.5" />
-                  {selectedFile.artifact?.classVisible || selectedFile.material?.classVisible
-                    ? '已激活'
-                    : '激活到班级'}
+                  {selectedFile.artifact?.classPublicationId ||
+                  selectedFile.material?.classPublicationId
+                    ? `已发布 · ${(selectedFile.artifact?.classPublicationId ??
+                        selectedFile.material?.classPublicationId)!.slice(-6)}`
+                    : course.status !== 'active'
+                      ? '请先发布课程'
+                      : '发布到班级'}
                 </Button>
               )}
               {selectedFile?.artifact?.classroomUrl && (

@@ -48,6 +48,9 @@ export interface CourseLessonFile {
   title: string;
   content: string;
   status: 'draft' | 'ready';
+  classVisible?: boolean;
+  classPublicationId?: string;
+  classPublishedAt?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -94,6 +97,9 @@ export interface CourseMaterialRecord {
   /** Explicit teacher-controlled visibility in the teaching class. */
   classVisible?: boolean;
   activatedAt?: number;
+  /** Immutable identifier assigned when this material is first published to Class. */
+  classPublicationId?: string;
+  classPublishedAt?: number;
 }
 
 export interface CourseStudentLearningState {
@@ -294,6 +300,9 @@ export interface CourseArtifactRecord {
   /** Explicit teacher-controlled visibility in the teaching class. */
   classVisible?: boolean;
   activatedAt?: number;
+  /** Immutable identifier assigned when this artifact is first published to Class. */
+  classPublicationId?: string;
+  classPublishedAt?: number;
 }
 
 export interface PublishedKnowledgeCitation {
